@@ -130,6 +130,13 @@ The system creates a unified tool interface combining:
 - Validate input schemas using Zod
 - Use TypeScript for type safety
 
+### Deno CLI and Configuration
+- Deno supports direct TypeScript and JavaScript execution without transpilation
+- Uses `deno.json` or `deno.jsonc` for project configuration
+- Native support for import maps and import specifiers
+- Built-in dependency management without separate package manager
+- Supports TypeScript type checking and linting out of the box
+
 ### Security Considerations
 - Telegram webhook validation prevents unauthorized access
 - Username allowlists control system access
