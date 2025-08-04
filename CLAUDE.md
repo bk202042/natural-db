@@ -130,12 +130,50 @@ The system creates a unified tool interface combining:
 - Validate input schemas using Zod
 - Use TypeScript for type safety
 
-### Deno CLI and Configuration
-- Deno supports direct TypeScript and JavaScript execution without transpilation
-- Uses `deno.json` or `deno.jsonc` for project configuration
-- Native support for import maps and import specifiers
-- Built-in dependency management without separate package manager
-- Supports TypeScript type checking and linting out of the box
+## Deno Runtime and Dependencies
+
+### Why IDE Warnings Appear
+Edge Functions run in Deno runtime, which handles dependencies differently than Node.js:
+- **npm: imports**: Functions use `npm:@ai-sdk/openai`, `npm:zod` syntax
+- **IDE confusion**: Code editors expect `node_modules` but Deno resolves packages at runtime
+- **No package.json**: Deno doesn't use traditional npm package management
+- **Warnings are harmless**: Functions work perfectly despite IDE warnings
+
+### Deno Dependency Management
+- **Automatic resolution**: `npm:` packages are downloaded and cached at runtime
+- **URL imports**: Direct imports like `https://deno.land/x/postgres@v0.17.0/mod.ts`
+- **No installation needed**: No npm, yarn, or package manager required
+- **Global caching**: Dependencies cached globally by Deno runtime
+
+### Deno Configuration (`deno.json`)
+```json
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "lib": ["deno.window", "dom"]
+  },
+  "imports": {
+    "@ai-sdk/openai": "npm:@ai-sdk/openai",
+    "ai": "npm:ai",
+    "zod": "npm:zod",
+    "@supabase/supabase-js": "npm:@supabase/supabase-js"
+  },
+  "tasks": {
+    "dev": "supabase start",
+    "deploy": "supabase functions deploy --no-verify-jwt"
+  }
+}
+```
+
+### IDE Setup for Deno
+For VS Code, create `.vscode/settings.json`:
+```json
+{
+  "deno.enable": true,
+  "deno.unstable": true,
+  "typescript.preferences.includePackageJsonAutoImports": "off"
+}
+```
 
 ### Security Considerations
 - Telegram webhook validation prevents unauthorized access

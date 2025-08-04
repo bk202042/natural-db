@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "lib": ["deno.window", "dom"],
+    "strict": true,
+    "exactOptionalPropertyTypes": true
+  },
+  "imports": {
+    "@ai-sdk/openai": "npm:@ai-sdk/openai",
+    "ai": "npm:ai",
+    "zod": "npm:zod",
+    "@supabase/supabase-js": "npm:@supabase/supabase-js",
+    "postgres": "https://deno.land/x/postgres@v0.17.0/mod.ts"
+  },
+  "tasks": {
+    "dev": "supabase start",
+    "deploy": "supabase functions deploy --no-verify-jwt",
+    "serve": "supabase functions serve"
+  },
+  "exclude": [
+    "node_modules",
+    ".git"
+  ]
+}
