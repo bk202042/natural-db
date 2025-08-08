@@ -91,11 +91,11 @@
     },
     {
       "id": "mem_1754619253153_ghgejc979",
-      "content": "COMPLETELY FIXED: The 500 errors had multiple root causes - all now resolved:\n1. Variable scope: 'raw' variable declared inside try block but accessed in catch\n2. Variable scope: 'callbackUrl', 'metadata', 'timezone' declared inside try but accessed in catch  \n3. Zod schema compatibility: 'z.string().uuid().or(z.string())' syntax caused Zod parsing errors\nFixed by moving variable declarations outside try block and simplifying Zod schema. Function now properly logs detailed errors instead of generic 500s.",
-      "type": "solution",
+      "content": "FINAL FIX: The issue was not in natural-db function, but in telegram-input function. The telegram-input was sending `timezone: null` instead of `timezone: userTimezone` in the payload to natural-db. This caused the natural-db function to receive invalid data. Fixed by updating the payload in telegram-input to use the actual userTimezone variable. Both functions are now properly fixed and deployed.",
+      "type": "troubleshooting",
       "tags": [
-        "solution",
         "troubleshooting",
+        "solution",
         "deployment",
         "config",
         "supabase",
@@ -105,12 +105,12 @@
         "resolved"
       ],
       "timestamp": "2025-08-08T02:14:13.153Z",
-      "context": "Root cause identified and fixed",
+      "context": "Complete resolution - both functions fixed",
       "accessCount": 0,
       "lastAccessed": "2025-08-08T02:14:13.153Z",
       "lastVerified": "2025-08-08T02:14:13.153Z",
       "status": "fresh"
     }
   ],
-  "lastUpdated": "2025-08-08T02:31:11.602Z"
+  "lastUpdated": "2025-08-08T02:35:10.571Z"
 }

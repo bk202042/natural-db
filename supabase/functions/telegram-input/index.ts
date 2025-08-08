@@ -389,7 +389,7 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
           username: username,
           chatId,
         },
-        timezone: null,
+        timezone: userTimezone,
         incomingMessageRole: "user",
         callbackUrl: callbackUrl,
       };
