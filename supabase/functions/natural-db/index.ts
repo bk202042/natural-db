@@ -37,7 +37,7 @@ const MAX_RELEVANT_MESSAGES = 5;
 const IncomingPayloadSchema = z.object({
   userPrompt: z.string().min(1),
   id: z.union([z.string(), z.number()]),
-  userId: z.string().uuid().or(z.string()),
+  userId: z.string(),
   metadata: z.record(z.unknown()).optional(),
   timezone: z.string().nullable().optional(),
   incomingMessageRole: z.enum(["user", "assistant", "system", "system_routine_task"]),
@@ -260,9 +260,13 @@ Deno.serve(async (req) => {
   }
 
   let mcpClient: unknown = null;
+  let raw: any = null;
+  let callbackUrl: string | undefined;
+  let metadata: Record<string, unknown> = {};
+  let timezone: string | null | undefined;
 
   try {
-    const raw = await req.json();
+    raw = await req.json();
     const parsed = IncomingPayloadSchema.safeParse(raw);
     if (!parsed.success) {
       console.error("Invalid request body:", parsed.error);
@@ -273,11 +277,12 @@ Deno.serve(async (req) => {
       userPrompt,
       id,
       userId,
-      metadata = {},
-      timezone,
       incomingMessageRole,
-      callbackUrl,
     } = parsed.data;
+    
+    metadata = parsed.data.metadata || {};
+    timezone = parsed.data.timezone;
+    callbackUrl = parsed.data.callbackUrl;
 
     if (!id || !userId || !allowedUsernames) {
       return new Response(

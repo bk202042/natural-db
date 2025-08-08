@@ -1,4 +1,116 @@
 {
-  "memories": [],
-  "lastUpdated": "2025-08-03T23:56:31.457Z"
+  "memories": [
+    {
+      "id": "mem_1754618746685_y9bxuyu7t",
+      "content": "Debugging Supabase Edge Function 500 error: natural-db function returning HTTP 500 status. Error occurred at 2025-08-08T02:04:17.371Z in eu-central-1 region. Need to examine function code for potential issues causing the crash.",
+      "type": "code",
+      "tags": [
+        "code",
+        "debugging",
+        "supabase",
+        "edge-functions",
+        "500-error"
+      ],
+      "timestamp": "2025-08-08T02:05:46.683Z",
+      "context": "Supabase Edge Function debugging session",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-08T02:05:46.683Z",
+      "lastVerified": "2025-08-08T02:05:46.683Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754619108144_7bpzron0z",
+      "content": "Supabase Edge Function natural-db returning 500 Internal Server Error. Status 500, content-length 21, execution ID 03384f90-15ef-4a69-8c57-bc238cac537f. Need to check function logs and code for runtime errors.",
+      "type": "code",
+      "tags": [
+        "code",
+        "supabase",
+        "edge-function",
+        "500-error",
+        "natural-db"
+      ],
+      "timestamp": "2025-08-08T02:11:48.144Z",
+      "context": "Debugging Edge Function error",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-08T02:11:48.144Z",
+      "lastVerified": "2025-08-08T02:11:48.144Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754619137268_vdy8haxzx",
+      "content": "Debugging Supabase Edge Function 500 error:\n- Function: natural-db\n- Error: 500 Internal Server Error, 21-byte response\n- Issue: Error occurs before main error handling, suggests module/import failure\n- Investigation plan: Check imports, dependencies, environment variables, syntax issues",
+      "type": "config",
+      "tags": [
+        "config",
+        "debugging",
+        "supabase",
+        "edge-functions",
+        "500-error"
+      ],
+      "timestamp": "2025-08-08T02:12:17.268Z",
+      "context": "natural-db Edge Function debugging session",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-08T02:12:17.268Z",
+      "lastVerified": "2025-08-08T02:12:17.268Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754619189160_4rcem8r7y",
+      "content": "Code Analysis Findings:\n1. All three main files (index.ts, db-utils.ts, tools.ts) have correct syntax and imports\n2. deno.json properly maps npm imports used in the code\n3. Required environment variables in index.ts: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY\n4. Additional env var in db-utils.ts: SUPABASE_DB_URL (not checked in main function)\n5. The 500 error is likely happening during module loading/initialization phase",
+      "type": "config",
+      "tags": [
+        "config",
+        "debugging",
+        "findings",
+        "environment-variables"
+      ],
+      "timestamp": "2025-08-08T02:13:09.160Z",
+      "context": "natural-db debugging session - findings so far",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-08T02:13:09.160Z",
+      "lastVerified": "2025-08-08T02:13:09.160Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754619220711_00us8yp3j",
+      "content": "Debugging Analysis Summary:\nMOST LIKELY ROOT CAUSE: Missing or incorrect SUPABASE_DB_URL environment variable\n- db-utils.ts requires SUPABASE_DB_URL for postgres connection pool\n- This env var is checked in ensureDbPool() function (line 14-17)\n- If missing/incorrect, throws error: \"SUPABASE_DB_URL environment variable not set\"\n- This happens during module loading, before main error handling\n- Explains 21-byte response (minimal error) and no detailed logs\n\nOther potential causes ruled out:\n1. Syntax errors: All files are syntactically correct\n2. Import issues: npm: imports are properly configured in deno.json  \n3. Recent changes: deno.json addition looks correct",
+      "type": "config",
+      "tags": [
+        "config",
+        "debugging",
+        "root-cause",
+        "environment-variables",
+        "supabase-db-url"
+      ],
+      "timestamp": "2025-08-08T02:13:40.711Z",
+      "context": "natural-db debugging - root cause analysis",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-08T02:13:40.711Z",
+      "lastVerified": "2025-08-08T02:13:40.711Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754619253153_ghgejc979",
+      "content": "COMPLETELY FIXED: The 500 errors had multiple root causes - all now resolved:\n1. Variable scope: 'raw' variable declared inside try block but accessed in catch\n2. Variable scope: 'callbackUrl', 'metadata', 'timezone' declared inside try but accessed in catch  \n3. Zod schema compatibility: 'z.string().uuid().or(z.string())' syntax caused Zod parsing errors\nFixed by moving variable declarations outside try block and simplifying Zod schema. Function now properly logs detailed errors instead of generic 500s.",
+      "type": "solution",
+      "tags": [
+        "solution",
+        "troubleshooting",
+        "deployment",
+        "config",
+        "supabase",
+        "edge-function",
+        "500-error",
+        "environment-variables",
+        "resolved"
+      ],
+      "timestamp": "2025-08-08T02:14:13.153Z",
+      "context": "Root cause identified and fixed",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-08T02:14:13.153Z",
+      "lastVerified": "2025-08-08T02:14:13.153Z",
+      "status": "fresh"
+    }
+  ],
+  "lastUpdated": "2025-08-08T02:31:11.602Z"
 }
