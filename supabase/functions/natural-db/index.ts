@@ -69,8 +69,15 @@ Deno.serve(async (req) => {
     metadata = parsed.data.metadata || {};
     callbackUrl = parsed.data.callbackUrl;
 
-    // Simple AI response for now - just echo the message
-    const finalResponse = `You said: "${userPrompt}". I received your message successfully!`;
+    // Generate AI response using OpenAI
+    const result = await generateText({
+      model: openai(openaiModel),
+      system: `You are a helpful AI assistant. You are concise and friendly. The user's timezone is ${parsed.data.timezone || 'UTC'}. Current time: ${new Date().toISOString()}.`,
+      messages: [{ role: "user", content: userPrompt }],
+      maxTokens: 1000,
+    });
+
+    const finalResponse = result.text;
 
     // Call telegram-outgoing to send the response
     if (callbackUrl) {
