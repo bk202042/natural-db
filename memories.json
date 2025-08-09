@@ -110,7 +110,59 @@
       "lastAccessed": "2025-08-08T02:14:13.153Z",
       "lastVerified": "2025-08-08T02:14:13.153Z",
       "status": "fresh"
+    },
+    {
+      "id": "mem_1754711094321_xtjiei4l2",
+      "content": "Natural-DB to Real Estate CS Bot transformation project started. Current system: Telegram-based AI assistant with Supabase backend, pgvector memory, edge functions architecture. Target: Real estate customer service bot with fee reminders, document management, and Zapier MCP integration.",
+      "type": "concept",
+      "tags": [
+        "concept",
+        "real-estate",
+        "transformation",
+        "planning"
+      ],
+      "timestamp": "2025-08-09T03:44:54.321Z",
+      "context": "Project transformation planning",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T03:44:54.321Z",
+      "lastVerified": "2025-08-09T03:44:54.321Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754711115918_ulup4hxka",
+      "content": "Current Natural-DB Analysis: \n- Telegram-based AI assistant with Supabase backend\n- Edge Functions: telegram-input, natural-db (brain), telegram-outgoing\n- Database: Postgres with pgvector, RLS policies, memories schema\n- AI: OpenAI integration via Vercel AI SDK\n- Scheduling: pg_cron for autonomous tasks\n- Memory: Chronological (messages), Semantic (pgvector), Structured (LLM-owned tables)\n- Security: RLS policies, role-based access, allowlist authentication",
+      "type": "general",
+      "tags": [
+        "general",
+        "database",
+        "authentication",
+        "system-analysis",
+        "current-state"
+      ],
+      "timestamp": "2025-08-09T03:45:15.918Z",
+      "context": "System analysis for transformation",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T03:45:15.918Z",
+      "lastVerified": "2025-08-09T03:45:15.918Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754711116022_lwzcm7uvc",
+      "content": "Real Estate CS Bot Requirements:\n- Multi-tenant architecture (tenant isolation)\n- Fee reminder system (electricity, management, water, etc.)\n- Document management (contracts, invoices with AI parsing)\n- Email/Calendar integration via Zapier MCP\n- Recurring scheduled notifications\n- Tenant-aware RLS policies\n- Real estate domain-specific tools and workflows",
+      "type": "concept",
+      "tags": [
+        "concept",
+        "requirements",
+        "real-estate",
+        "target-state"
+      ],
+      "timestamp": "2025-08-09T03:45:16.022Z",
+      "context": "Target requirements analysis",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T03:45:16.022Z",
+      "lastVerified": "2025-08-09T03:45:16.022Z",
+      "status": "fresh"
     }
   ],
-  "lastUpdated": "2025-08-08T02:35:10.571Z"
+  "lastUpdated": "2025-08-09T03:45:16.022Z"
 }

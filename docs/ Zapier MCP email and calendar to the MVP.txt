@@ -1,0 +1,144 @@
+### Add Zapier MCP email and calendar to the MVP
+
+- **Objective**: Add email notifications (Zapier MCP) for calendar events, communications, and fee notifications, without bloating the MVP.
+
+### New env/config
+- **ZAPIER_MCP_URL**: already supported in repo docs; required to enable MCP.
+- Optional: `OPENAI_MODEL` fine as-is.
+
+### Minimal data model (memories schema)
+Add one migration (e.g., `20250808_add_notifications_mvp.sql`):
+
+```sql
+-- Notification/email prefs, per chat
+CREATE TABLE IF NOT EXISTS memories.notification_settings (
+  chat_id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  email_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  calendar_provider TEXT DEFAULT 'google', -- for Zapier routing/hints
+  default_reminder_minutes INTEGER DEFAULT 60,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Track created external calendar events per fee
+CREATE TABLE IF NOT EXISTS memories.fee_calendar_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  fee_id UUID NOT NULL,                            -- FK to memories.fees (from prior plan)
+  external_event_id TEXT NOT NULL,                 -- Zapier/Calendar event id
+  external_calendar_id TEXT,                       -- e.g., primary or calendarId
+  provider TEXT DEFAULT 'google',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+Notes:
+- Keep PII minimal (only email); store consent via `email_enabled`.
+
+### Tools to add (wrap existing SQL + Zapier MCP)
+Extend `supabase/functions/natural-db/tools.ts` with these tools (compose with existing `createTools`):
+
+- **notifications_set_email_prefs**
+  - input: `{ email: string, email_enabled?: boolean, calendar_provider?: 'google'|'outlook', default_reminder_minutes?: number }`
+  - upsert into `memories.notification_settings` keyed by `chat_id`.
+
+- **notifications_send_email** (Zapier MCP-backed)
+  - input: `{ to?: string, subject: string, html?: string, text?: string }`
+  - behavior:
+    - Resolve recipient: `to` or fallback to `notification_settings.email`.
+    - If MCP is configured, call Zapier email action; otherwise return error message.
+
+- **calendar_create_event_for_fee** (Zapier MCP-backed)
+  - input: `{ fee_id: string, title?: string }`
+  - reads fee from `memories.fees`, notification prefs for email/tz, then calls a calendar create event action (Zapier) with:
+    - start/end next occurrence (based on `due_day`, 09:00 local or `default_reminder_minutes`)
+    - recurrence: monthly on `due_day`
+    - attendees: the same email (optional)
+  - stores returned `{external_event_id, external_calendar_id, provider}` in `memories.fee_calendar_events`.
+
+- **calendar_cancel_event_for_fee**
+  - input: `{ fee_id: string }`
+  - look up `fee_calendar_events` and call Zapier cancel/delete; mark fee inactive or just delete event mapping.
+
+- Optional quality-of-life:
+  - **notifications_list_prefs** (debug)
+  - **calendar_list_fee_events** (debug)
+
+Implementation details:
+- Initialize MCP client once in `natural-db/index.ts` if `ZAPIER_MCP_URL` is set:
+  - Use `experimental_createMCPClient({ server: { transport: 'http', url: zapierMcpUrl } })`
+  - On startup, `await mcp.listTools()`; cache names/ids to find email and calendar actions.
+- Route tool calls with a thin wrapper: `await mcp.callTool(toolName, args)` and return normalized results.
+
+### Updated fee scheduling flow
+- On `fees_create` (from the prior plan):
+  - Schedule the monthly Telegram reminder via `schedule_prompt` (unchanged).
+  - If `notification_settings.email_enabled` and `email` exist:
+    - Send a confirmation email via `notifications_send_email`:
+      - subject: “Reminder set: {fee_type} on day {due_day}”
+      - body: summary + how to cancel.
+    - Create external calendar event via `calendar_create_event_for_fee`.
+
+- On cron fire (system routine task):
+  - Existing `natural-db` system handler generates Telegram message.
+  - If email is enabled, additionally call `notifications_send_email` with:
+    - subject: “Today: {fee_type} payment due”
+    - text/html: amount/currency if known, and friendly call to action.
+
+### Documents flow updates
+- After `docs_store` and `docs_parse`:
+  - Expose a tool: **docs_email_summary**
+    - input: `{ document_id: string, to?: string }`
+    - Loads `documents.parsed` and emails a short summary (and link/source_value if URL).
+  - MVP avoids attachments; rely on text or URL in the email.
+
+### Prompt/intent extensions (light)
+Teach the AI to use new tools by names; examples the bot should handle:
+- “Set my email to foo@bar.com and send me reminders too”
+- “Create a calendar event for my electricity fee reminder”
+- “Email me a summary of the last invoice”
+
+### Error handling and fallback
+- If MCP not configured or Zapier action fails:
+  - Return tool error to the model; the model should confirm in Telegram that email/calendar actions were skipped, but fee reminders via Telegram remain active.
+- Validate emails with a simple regex; ask user to confirm when invalid.
+
+### Acceptance tests (MVP)
+- Save prefs → row in `memories.notification_settings`.
+- Create fee with email enabled → confirmation email sent, calendar event created, `fee_calendar_events` row present.
+- Monthly cron → Telegram reminder and email both sent.
+- Cancel fee → unschedule cron, delete external calendar event, email a cancellation confirmation.
+- docs_parse + docs_email_summary → email containing parsed fields.
+
+### Work breakdown (delta to previous plan)
+- Migration (notification tables): 0.5 day
+- MCP client bootstrap + wrappers: 0.5–1 day
+- Tools (4): 1–1.5 days
+- Orchestrator wiring (fee create/cron + docs email): 0.5–1 day
+- Tests and copy: 0.5 day
+
+### Security & privacy
+- Store only email + prefs in `memories.notification_settings`.
+- Provide opt-out by setting `email_enabled=false`.
+- Log only high-level statuses for Zapier calls; avoid storing provider tokens (handled by Zapier MCP).
+
+- Summary:
+  - Added minimal tables for email/calendar prefs and event mapping.
+  - Introduced MCP-backed tools for send email and create/cancel calendar events.
+  - Integrated email alongside Telegram for fee reminders and document summaries.
+  - Kept all changes localized to `memories` and tool layer to preserve MVP simplicity.
+
+### Multi-Tenancy Architecture
+
+Your current system appears designed for single-user deployment. For real estate CS bots, you need tenant isolation and tenant-aware RLS across core tables.
+
+```sql
+-- Add tenant isolation to all tables
+ALTER TABLE profiles ADD COLUMN tenant_id UUID;
+ALTER TABLE chats ADD COLUMN tenant_id UUID;
+ALTER TABLE messages ADD COLUMN tenant_id UUID;
+
+-- Create tenant-specific RLS policies
+CREATE POLICY "tenant_isolation" ON profiles
+    USING (tenant_id = (SELECT current_setting('app.current_tenant_id')::UUID));
+```
