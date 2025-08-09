@@ -6,7 +6,7 @@ import {
   convertBigIntsToStrings,
 } from "./db-utils.ts";
 
-// Local validation helpers (copied to keep file self-contained)
+// Local validation helpers
 const IDENTIFIER_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 function isValidIdentifier(name: string): boolean {
   return IDENTIFIER_REGEX.test(name);
@@ -17,22 +17,24 @@ function isValidJobName(name: string): boolean {
   return JOB_NAME_REGEX.test(name);
 }
 
-// Update createTools to accept the new signature from natural-db
+// Create tenant-aware tools for the real estate CS bot
 export function createTools(
   supabase: any, 
   chatId: string, 
   tenantId: string
 ) {
+  // Get Supabase URL from environment for cron callbacks
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 
   return {
     execute_sql: tool({
       description:
-        `Executes SQL within your private schema. Create tables directly (e.g., CREATE TABLE my_notes). Escape single quotes ('') in string literals. You have full control over this isolated database space.`,
+        `Executes SQL within your private memories schema. Create tables directly (e.g., CREATE TABLE my_notes). You have full control over this isolated database space with tenant isolation.`,
       parameters: z.object({
         query: z.string().describe("SQL query (DML/DDL)."),
       }),
       execute: async ({ query }) => {
-        const result = await executeRestrictedSQL(query);
+        const result = await executeRestrictedSQL(query, [], tenantId);
         if (result.error) return { error: result.error };
 
         const trimmed = query.trim();
@@ -42,14 +44,14 @@ export function createTools(
         }
         return JSON.stringify({
           message: "Command executed successfully.",
-          rowCount: Number(result.rowCount || 0),
+          rowCount: Number(result.result?.length || 0),
         });
       },
     }),
 
     get_distinct_column_values: tool({
       description:
-        `Retrieves distinct values for a column within your private schema. Use for columns with discrete values (e.g., status, category) rather than freeform text.`,
+        `Retrieves distinct values for a column within your private memories schema.`,
       parameters: z.object({
         table_name: z.string().describe("Table name."),
         column_name: z.string().describe("Column name."),
@@ -59,145 +61,502 @@ export function createTools(
           return { error: "Invalid table or column name format." };
         }
         const query = `SELECT DISTINCT "${column_name}" FROM ${table_name};`;
-        const result = await executeRestrictedSQL(query);
+        const result = await executeRestrictedSQL(query, [], tenantId);
         if (result.error) return { error: result.error };
         const values = result.result.map((row: Record<string, unknown>) => row[column_name]);
         return { distinct_values: convertBigIntsToStrings(values) };
       },
     }),
 
-    schedule_prompt: tool({
-      description: "Schedules a job to run at a future time using cron or ISO 8601 timestamp.",
+    // ========================================================================
+    // REAL ESTATE DOMAIN TOOLS (Tenant-Aware)
+    // ========================================================================
+
+    fees_create: tool({
+      description: "Creates a recurring fee reminder with optional amount and note. Schedules monthly reminders and optionally sends email confirmation.",
       parameters: z.object({
-        schedule_expression: z
-          .string()
-          .describe("Cron (e.g., '0 9 * * MON') or ISO timestamp."),
-        prompt_to_schedule: z.string().describe("Directive for the assistant when job runs."),
-        job_name: z.string().describe("Descriptive suffix for job name."),
+        fee_type: z.enum(['electricity', 'management', 'water', 'other']).describe("Type of fee"),
+        due_day: z.number().int().min(1).max(31).describe("Day of month when fee is due (1-31)"),
+        amount: z.number().positive().optional().describe("Optional fee amount"),
+        currency: z.string().length(3).default('USD').optional().describe("Currency code (e.g. USD, EUR)"),
+        note: z.string().optional().describe("Optional note or description")
       }),
-      execute: async ({ schedule_expression, prompt_to_schedule, job_name }) => {
-        if (!id || !userId || !cronCallbackUrl) {
-          return { error: "Missing required data for scheduling." };
-        }
-
-        const payloadForCron = JSON.stringify({
-          userPrompt: prompt_to_schedule,
-          id,
-          userId,
-          metadata: { ...metadata, originalUserMessage: prompt_to_schedule },
-          timezone,
-          incomingMessageRole: "system_routine_task",
-          callbackUrl,
-        });
-
-        const escapedPayload = payloadForCron.replace(/'/g, "''");
-        let isOneOff = false;
+      execute: async ({ fee_type, due_day, amount, currency = 'USD', note }) => {
         try {
-          const date = new Date(schedule_expression);
-          if (
-            !isNaN(date.getTime()) &&
-            schedule_expression.includes("T") &&
-            (schedule_expression.includes("Z") || schedule_expression.match(/[+-]\d{2}:\d{2}$/))
-          ) {
-            isOneOff = true;
+          // Insert fee record with tenant context
+          const insertFeeResult = await executeRestrictedSQL(
+            `INSERT INTO fees (tenant_id, chat_id, fee_type, due_day, amount, currency, note, is_active) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, true) 
+             RETURNING id, fee_type, due_day, amount, currency, note`,
+            [tenantId, chatId, fee_type, due_day, amount, currency, note],
+            tenantId
+          );
+
+          if (insertFeeResult.error) {
+            return { error: `Failed to create fee: ${insertFeeResult.error}` };
           }
-        } catch (_) {
-          // Not a valid date
+
+          const fee = insertFeeResult.result[0];
+          const feeId = fee.id;
+
+          // Schedule monthly cron job at 9:00 AM on due day
+          const cronExpression = `0 9 ${due_day} * *`;
+          const jobName = `fee_${chatId}_${feeId}`.replace(/[^a-zA-Z0-9_]/g, '_').substring(0, 50);
+          
+          const cronPayload = JSON.stringify({
+            userPrompt: `Send a fee reminder for fee_id=${feeId} and chat_id=${chatId}`,
+            id: chatId,
+            userId: 'system',
+            metadata: { feeId, chatId, originalUserMessage: 'scheduled_fee_reminder' },
+            tenantId: tenantId,
+            incomingMessageRole: 'system_routine_task',
+            callbackUrl: `${supabaseUrl}/functions/v1/telegram-outgoing`
+          });
+
+          const escapedPayload = cronPayload.replace(/'/g, "''");
+          const scheduleSQL = `SELECT cron.schedule('${jobName}', '${cronExpression}', $$ SELECT net.http_post(url := '${supabaseUrl}/functions/v1/natural-db', body := '${escapedPayload}'::jsonb, headers := '{"Content-Type": "application/json"}'::jsonb) $$);`;
+          
+          const scheduleResult = await executePrivilegedSQL(scheduleSQL);
+          if (scheduleResult.error) {
+            return { error: `Fee created but scheduling failed: ${scheduleResult.error}` };
+          }
+
+          // Store job metadata
+          await executeRestrictedSQL(
+            `INSERT INTO fee_jobs (tenant_id, fee_id, cron_job_name, cron_expression) VALUES ($1, $2, $3, $4)`,
+            [tenantId, feeId, jobName, cronExpression],
+            tenantId
+          );
+
+          let confirmationMessage = `✅ ${fee_type} fee reminder created for day ${due_day} of each month`;
+          if (amount) {
+            confirmationMessage += ` (${currency} ${amount})`;
+          }
+          if (note) {
+            confirmationMessage += ` - ${note}`;
+          }
+
+          return confirmationMessage;
+
+        } catch (error) {
+          return { error: `Failed to create fee reminder: ${error.message}` };
         }
-
-        const descriptiveSuffix = job_name
-          ? job_name.replace(/[^a-zA-Z0-9_]/g, "_").substring(0, 18)
-          : Date.now().toString();
-
-        const sanitizedId = String(id).replace(/[^a-zA-Z0-9_]/g, "_");
-        
-        const finalJobName = isOneOff
-          ? `one_off_${sanitizedId}_${descriptiveSuffix}`
-          : `cron_${sanitizedId}_${descriptiveSuffix}`;
-
-        let sqlCommand: string;
-        if (isOneOff) {
-          const date = new Date(schedule_expression);
-          const cronForTimestamp = `${date.getUTCMinutes()} ${date.getUTCHours()} ${date.getUTCDate()} ${
-            date.getUTCMonth() + 1
-          } *`;
-          const taskLogic =
-            `PERFORM net.http_post(url := '${cronCallbackUrl}', body := '${escapedPayload}'::jsonb, headers := '{"Content-Type": "application/json"}'::jsonb); ` +
-            `PERFORM cron.unschedule('${finalJobName}');`;
-          sqlCommand =
-            `SELECT cron.schedule('${finalJobName}', '${cronForTimestamp}', $$ DO $job$ BEGIN ${taskLogic} EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'Error job ${finalJobName}: %', SQLERRM; BEGIN PERFORM cron.unschedule('${finalJobName}'); RAISE NOTICE 'Unscheduled ${finalJobName} after error.'; EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'CRITICAL: Failed to unschedule ${finalJobName} after error: %', SQLERRM; END; RAISE; END; $job$; $$);`;
-        } else {
-          sqlCommand =
-            `SELECT cron.schedule('${finalJobName}', '${schedule_expression}', $$ SELECT net.http_post(url := '${cronCallbackUrl}', body := '${escapedPayload}'::jsonb, headers := '{"Content-Type": "application/json"}'::jsonb) $$);`;
-        }
-
-        const scheduleResult = await executePrivilegedSQL(sqlCommand);
-        if (scheduleResult.error) return { error: scheduleResult.error };
-
-        if (scheduleResult.result && scheduleResult.result.length > 0) {
-          const jobIdResult = scheduleResult.result[0][Object.keys(scheduleResult.result[0])[0]];
-          return `Job scheduled. Name: ${finalJobName || jobIdResult}. Type: ${isOneOff ? "One-off" : "Recurring"}`;
-        }
-        return { error: "Failed to schedule job: No confirmation from cron.schedule." };
-      },
+      }
     }),
 
-    unschedule_prompt: tool({
-      description:
-        "Unschedules a previously scheduled job by its job name. Use this to cancel or remove scheduled tasks.",
-      parameters: z.object({
-        job_name: z.string().describe(
-          "The name of the job to unschedule (from schedule_prompt or visible in scheduled routines).",
-        ),
-      }),
-      execute: async ({ job_name }) => {
-        if (!job_name) return { error: "Job name is required for unscheduling." };
-        if (!isValidJobName(job_name)) {
-          return {
-            error:
-              "Invalid job name format. Job names should contain only letters, numbers, and underscores.",
-          };
-        }
-        const sqlCommand = `SELECT cron.unschedule('${job_name}');`;
-        const unscheduleResult = await executePrivilegedSQL(sqlCommand);
-        if (unscheduleResult.error) return { error: unscheduleResult.error };
-        return `Job '${job_name}' has been successfully unscheduled and removed.`;
-      },
-    }),
-
-    update_system_prompt: tool({
-      description:
-        "Updates ONLY the personalized behavior section of the system prompt. The base system behavior (database operations, scheduling, etc.) never changes. Use this when the user wants to customize personality, communication style, or add specific behavioral preferences.",
-      parameters: z.object({
-        new_system_prompt: z
-          .string()
-          .describe(
-            "ONLY the personalized behavior additions/changes - NOT the entire system prompt. Focus on personality, communication style, or specific user preferences. The base database and scheduling behavior remains unchanged.",
-          ),
-        description: z.string().describe(
-          "Brief description of what this prompt change accomplishes or why it was made.",
-        ),
-      }),
-      execute: async ({ new_system_prompt, description }) => {
-        if (!id) return { error: "Chat ID is required to update system prompt." };
-        const result = await updateSystemPrompt(id, new_system_prompt, description);
-        return result.success
-          ? `System prompt updated successfully. Description: ${description}. The new prompt will take effect in the next conversation.`
-          : { error: result.error || "Failed to update system prompt." };
-      },
-    }),
-
-    get_system_prompt_history: tool({
-      description:
-        "Retrieves the history of system prompt changes for this user, including versions and descriptions.",
+    fees_list_active: tool({
+      description: "Lists all active fee reminders for the current chat.",
       parameters: z.object({}),
       execute: async () => {
-        if (!id) return { error: "Chat ID is required to retrieve system prompt history." };
-        const query = `SELECT version, description, created_by_role, is_active, created_at, LENGTH(prompt_content) as prompt_length FROM system_prompts WHERE chat_id = $1 ORDER BY version DESC LIMIT 10;`;
-        const result = await executePrivilegedSQL(query, [id.toString()]);
-        if (result.error) return { error: result.error };
-        return JSON.stringify(result.result);
-      },
+        try {
+          const result = await executeRestrictedSQL(
+            `SELECT id, fee_type, due_day, amount, currency, note, created_at 
+             FROM fees 
+             WHERE tenant_id = $1 AND chat_id = $2 AND is_active = true 
+             ORDER BY due_day, fee_type`,
+            [tenantId, chatId],
+            tenantId
+          );
+
+          if (result.error) {
+            return { error: `Failed to list fees: ${result.error}` };
+          }
+
+          if (result.result.length === 0) {
+            return "No active fee reminders found.";
+          }
+
+          const feesList = result.result.map(fee => {
+            let feeDesc = `• ${fee.fee_type} (day ${fee.due_day})`;
+            if (fee.amount) {
+              feeDesc += ` - ${fee.currency} ${fee.amount}`;
+            }
+            if (fee.note) {
+              feeDesc += ` (${fee.note})`;
+            }
+            return feeDesc;
+          }).join('\n');
+
+          return `Active fee reminders:\n${feesList}`;
+
+        } catch (error) {
+          return { error: `Failed to list active fees: ${error.message}` };
+        }
+      }
+    }),
+
+    fees_cancel: tool({
+      description: "Cancels an active fee reminder by fee type and due day.",
+      parameters: z.object({
+        fee_type: z.enum(['electricity', 'management', 'water', 'other']).describe("Type of fee to cancel"),
+        due_day: z.number().int().min(1).max(31).describe("Due day to help identify the specific fee")
+      }),
+      execute: async ({ fee_type, due_day }) => {
+        try {
+          // Find the fee to cancel
+          const feeResult = await executeRestrictedSQL(
+            `SELECT id, fee_type, due_day FROM fees 
+             WHERE tenant_id = $1 AND chat_id = $2 AND fee_type = $3 AND due_day = $4 AND is_active = true`,
+            [tenantId, chatId, fee_type, due_day],
+            tenantId
+          );
+
+          if (feeResult.error) {
+            return { error: `Failed to find fee: ${feeResult.error}` };
+          }
+
+          if (feeResult.result.length === 0) {
+            return `No active ${fee_type} fee found for day ${due_day}.`;
+          }
+
+          const fee = feeResult.result[0];
+          const feeId = fee.id;
+
+          // Mark fee as inactive
+          const deactivateResult = await executeRestrictedSQL(
+            `UPDATE fees SET is_active = false, updated_at = NOW() 
+             WHERE id = $1 AND tenant_id = $2`,
+            [feeId, tenantId],
+            tenantId
+          );
+
+          if (deactivateResult.error) {
+            return { error: `Failed to cancel fee: ${deactivateResult.error}` };
+          }
+
+          // Find and unschedule the cron job
+          const jobResult = await executeRestrictedSQL(
+            `SELECT cron_job_name FROM fee_jobs WHERE tenant_id = $1 AND fee_id = $2`,
+            [tenantId, feeId],
+            tenantId
+          );
+
+          if (jobResult.result?.length > 0) {
+            const jobName = jobResult.result[0].cron_job_name;
+            const unscheduleResult = await executePrivilegedSQL(
+              `SELECT cron.unschedule('${jobName}');`
+            );
+            
+            if (unscheduleResult.error) {
+              return { error: `Fee cancelled but failed to unschedule job: ${unscheduleResult.error}` };
+            }
+          }
+
+          return `✅ ${fee_type} fee reminder for day ${due_day} has been cancelled.`;
+
+        } catch (error) {
+          return { error: `Failed to cancel fee: ${error.message}` };
+        }
+      }
+    }),
+
+    docs_store: tool({
+      description: "Stores a document (text or URL) for later parsing and retrieval.",
+      parameters: z.object({
+        doc_type: z.enum(['contract', 'invoice', 'other']).describe("Type of document"),
+        source_kind: z.enum(['text', 'url']).describe("Whether this is raw text or a URL"),
+        source_value: z.string().min(1).describe("The actual text content or URL")
+      }),
+      execute: async ({ doc_type, source_kind, source_value }) => {
+        try {
+          const result = await executeRestrictedSQL(
+            `INSERT INTO documents (tenant_id, chat_id, doc_type, source_kind, source_value) 
+             VALUES ($1, $2, $3, $4, $5) 
+             RETURNING id, doc_type, source_kind`,
+            [tenantId, chatId, doc_type, source_kind, source_value],
+            tenantId
+          );
+
+          if (result.error) {
+            return { error: `Failed to store document: ${result.error}` };
+          }
+
+          const doc = result.result[0];
+          return {
+            message: `✅ ${doc_type} document stored successfully`,
+            document_id: doc.id
+          };
+
+        } catch (error) {
+          return { error: `Failed to store document: ${error.message}` };
+        }
+      }
+    }),
+
+    docs_parse: tool({
+      description: "Parses a stored document using AI to extract structured information.",
+      parameters: z.object({
+        document_id: z.string().uuid().describe("ID of the document to parse")
+      }),
+      execute: async ({ document_id }) => {
+        try {
+          // Get the document
+          const docResult = await executeRestrictedSQL(
+            `SELECT id, doc_type, source_kind, source_value FROM documents 
+             WHERE id = $1 AND tenant_id = $2 AND chat_id = $3`,
+            [document_id, tenantId, chatId],
+            tenantId
+          );
+
+          if (docResult.error) {
+            return { error: `Failed to retrieve document: ${docResult.error}` };
+          }
+
+          if (docResult.result.length === 0) {
+            return { error: "Document not found" };
+          }
+
+          const doc = docResult.result[0];
+          let textContent = doc.source_value;
+
+          // Simple parsing for now - extract basic info
+          const parsed = {
+            document_type: doc.doc_type,
+            summary: `This is a ${doc.doc_type} document`,
+            extracted_at: new Date().toISOString(),
+            content_preview: textContent.substring(0, 200) + (textContent.length > 200 ? '...' : ''),
+            // TODO: Add OpenAI parsing for structured data extraction
+            fields: {
+              content_length: textContent.length,
+              source_type: doc.source_kind
+            }
+          };
+
+          // Update the document with parsed data
+          const updateResult = await executeRestrictedSQL(
+            `UPDATE documents SET parsed = $1 WHERE id = $2 AND tenant_id = $3`,
+            [JSON.stringify(parsed), document_id, tenantId],
+            tenantId
+          );
+
+          if (updateResult.error) {
+            return { error: `Failed to update parsed data: ${updateResult.error}` };
+          }
+
+          return `✅ Document parsed successfully. Summary: ${parsed.summary}`;
+
+        } catch (error) {
+          return { error: `Failed to parse document: ${error.message}` };
+        }
+      }
+    }),
+
+    docs_email_summary: tool({
+      description: "Emails a summary of a parsed document (placeholder for MCP integration).",
+      parameters: z.object({
+        document_id: z.string().uuid().describe("ID of the document to summarize"),
+        to: z.string().email().optional().describe("Email address (optional, uses chat settings if not provided)")
+      }),
+      execute: async ({ document_id, to }) => {
+        try {
+          // Get document and its parsed data
+          const docResult = await executeRestrictedSQL(
+            `SELECT id, doc_type, source_kind, source_value, parsed FROM documents 
+             WHERE id = $1 AND tenant_id = $2 AND chat_id = $3`,
+            [document_id, tenantId, chatId],
+            tenantId
+          );
+
+          if (docResult.error || docResult.result.length === 0) {
+            return { error: "Document not found" };
+          }
+
+          const doc = docResult.result[0];
+          
+          // Get email address if not provided
+          let emailAddress = to;
+          if (!emailAddress) {
+            const notificationResult = await executeRestrictedSQL(
+              `SELECT email FROM notification_settings WHERE tenant_id = $1 AND chat_id = $2`,
+              [tenantId, chatId],
+              tenantId
+            );
+
+            if (notificationResult.result?.length > 0) {
+              emailAddress = notificationResult.result[0].email;
+            } else {
+              return { error: "No email address provided and no notification settings found" };
+            }
+          }
+
+          const subject = `Document Summary: ${doc.doc_type}`;
+          // TODO: Implement actual email sending via MCP when available
+          return `✅ Document summary prepared for ${emailAddress}. Subject: ${subject}. (MCP email integration needed)`;
+
+        } catch (error) {
+          return { error: `Failed to email document summary: ${error.message}` };
+        }
+      }
+    }),
+
+    notifications_set_email_prefs: tool({
+      description: "Sets email notification preferences for the current chat.",
+      parameters: z.object({
+        email: z.string().email().describe("Email address for notifications"),
+        email_enabled: z.boolean().default(true).describe("Whether to enable email notifications"),
+        calendar_provider: z.enum(['google', 'outlook']).default('google').describe("Preferred calendar provider"),
+        default_reminder_minutes: z.number().int().min(1).default(60).describe("Default reminder time before due date in minutes")
+      }),
+      execute: async ({ email, email_enabled, calendar_provider, default_reminder_minutes }) => {
+        try {
+          const result = await executeRestrictedSQL(
+            `INSERT INTO notification_settings (tenant_id, chat_id, email, email_enabled, calendar_provider, default_reminder_minutes, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NOW())
+             ON CONFLICT (tenant_id, chat_id) 
+             DO UPDATE SET 
+               email = EXCLUDED.email,
+               email_enabled = EXCLUDED.email_enabled,
+               calendar_provider = EXCLUDED.calendar_provider,
+               default_reminder_minutes = EXCLUDED.default_reminder_minutes,
+               updated_at = NOW()
+             RETURNING email, email_enabled, calendar_provider, default_reminder_minutes`,
+            [tenantId, chatId, email, email_enabled, calendar_provider, default_reminder_minutes],
+            tenantId
+          );
+
+          if (result.error) {
+            return { error: `Failed to update notification settings: ${result.error}` };
+          }
+
+          const settings = result.result[0];
+          return `✅ Email preferences updated: ${settings.email} (${settings.email_enabled ? 'enabled' : 'disabled'}), ${settings.calendar_provider} calendar, ${settings.default_reminder_minutes}min reminders`;
+
+        } catch (error) {
+          return { error: `Failed to set email preferences: ${error.message}` };
+        }
+      }
+    }),
+
+    notifications_send_email: tool({
+      description: "Sends an email notification (placeholder for MCP integration).",
+      parameters: z.object({
+        to: z.string().email().optional().describe("Recipient email (uses chat settings if not provided)"),
+        subject: z.string().describe("Email subject"),
+        html: z.string().optional().describe("HTML email body"),
+        text: z.string().optional().describe("Plain text email body")
+      }),
+      execute: async ({ to, subject, html, text }) => {
+        try {
+          // Get email address if not provided
+          let emailAddress = to;
+          if (!emailAddress) {
+            const notificationResult = await executeRestrictedSQL(
+              `SELECT email, email_enabled FROM notification_settings WHERE tenant_id = $1 AND chat_id = $2`,
+              [tenantId, chatId],
+              tenantId
+            );
+
+            if (notificationResult.result?.length > 0) {
+              const settings = notificationResult.result[0];
+              if (!settings.email_enabled) {
+                return { error: "Email notifications are disabled for this chat" };
+              }
+              emailAddress = settings.email;
+            } else {
+              return { error: "No email address provided and no notification settings found" };
+            }
+          }
+
+          // TODO: Implement actual email sending via Zapier MCP when available
+          return {
+            status: "success",
+            message: `Email prepared for ${emailAddress} with subject: "${subject}". (MCP integration needed for actual sending)`
+          };
+
+        } catch (error) {
+          return { error: `Failed to send email: ${error.message}` };
+        }
+      }
+    }),
+
+    calendar_create_event_for_fee: tool({
+      description: "Creates a calendar event for a fee reminder (placeholder for MCP integration).",
+      parameters: z.object({
+        fee_id: z.string().uuid().describe("ID of the fee to create calendar event for"),
+        title: z.string().optional().describe("Custom event title")
+      }),
+      execute: async ({ fee_id, title }) => {
+        try {
+          // Get fee details
+          const feeResult = await executeRestrictedSQL(
+            `SELECT fee_type, due_day, amount, currency, note FROM fees 
+             WHERE id = $1 AND tenant_id = $2 AND is_active = true`,
+            [fee_id, tenantId],
+            tenantId
+          );
+
+          if (feeResult.error || feeResult.result.length === 0) {
+            return { error: "Fee not found or inactive" };
+          }
+
+          const fee = feeResult.result[0];
+          const eventTitle = title || `${fee.fee_type} fee due${fee.amount ? ` (${fee.currency} ${fee.amount})` : ''}`;
+
+          // TODO: Implement actual calendar event creation via Zapier MCP
+          const externalEventId = `mock_event_${fee_id}_${Date.now()}`;
+          
+          const result = await executeRestrictedSQL(
+            `INSERT INTO fee_calendar_events (tenant_id, fee_id, external_event_id, provider)
+             VALUES ($1, $2, $3, 'google')
+             RETURNING id, external_event_id`,
+            [tenantId, fee_id, externalEventId],
+            tenantId
+          );
+
+          if (result.error) {
+            return { error: `Failed to store calendar event mapping: ${result.error}` };
+          }
+
+          return `✅ Calendar event prepared: "${eventTitle}" for ${fee.fee_type} fee on day ${fee.due_day}. (MCP integration needed for actual calendar creation)`;
+
+        } catch (error) {
+          return { error: `Failed to create calendar event: ${error.message}` };
+        }
+      }
+    }),
+
+    calendar_cancel_event_for_fee: tool({
+      description: "Cancels the calendar event for a fee reminder.",
+      parameters: z.object({
+        fee_id: z.string().uuid().describe("ID of the fee whose calendar event should be cancelled")
+      }),
+      execute: async ({ fee_id }) => {
+        try {
+          // Find the calendar event mapping
+          const eventResult = await executeRestrictedSQL(
+            `SELECT id, external_event_id FROM fee_calendar_events 
+             WHERE tenant_id = $1 AND fee_id = $2`,
+            [tenantId, fee_id],
+            tenantId
+          );
+
+          if (eventResult.error) {
+            return { error: `Failed to find calendar event: ${eventResult.error}` };
+          }
+
+          if (eventResult.result.length === 0) {
+            return "No calendar event found for this fee.";
+          }
+
+          const event = eventResult.result[0];
+
+          // TODO: Implement actual calendar event cancellation via Zapier MCP
+          const deleteResult = await executeRestrictedSQL(
+            `DELETE FROM fee_calendar_events WHERE id = $1 AND tenant_id = $2`,
+            [event.id, tenantId],
+            tenantId
+          );
+
+          if (deleteResult.error) {
+            return { error: `Failed to remove calendar event: ${deleteResult.error}` };
+          }
+
+          return `✅ Calendar event cancelled for fee (event ID: ${event.external_event_id})`;
+
+        } catch (error) {
+          return { error: `Failed to cancel calendar event: ${error.message}` };
+        }
+      }
     }),
   };
-} 
+}

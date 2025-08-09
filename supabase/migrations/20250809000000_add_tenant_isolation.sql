@@ -40,7 +40,8 @@ CREATE INDEX IF NOT EXISTS idx_tenant_memberships_tenant_id ON public.tenant_mem
 
 -- Transaction-pool safe tenant resolver
 -- Prefers JWT claim, falls back to request header
-CREATE OR REPLACE FUNCTION auth.current_tenant_id() RETURNS UUID
+-- Note: Created in public schema due to auth schema permissions
+CREATE OR REPLACE FUNCTION public.current_tenant_id() RETURNS UUID
 LANGUAGE SQL STABLE AS $$
   SELECT coalesce(
     nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'tenant_id',
@@ -48,7 +49,7 @@ LANGUAGE SQL STABLE AS $$
   )::uuid
 $$;
 
-COMMENT ON FUNCTION auth.current_tenant_id() IS 'Stable resolver for current tenant context from JWT or header';
+COMMENT ON FUNCTION public.current_tenant_id() IS 'Stable resolver for current tenant context from JWT or header';
 
 -- ============================================================================
 -- PHASE 3: Add tenant_id to Existing Tables (Safe Phased Approach)
@@ -127,24 +128,24 @@ DROP POLICY IF EXISTS "messages_access" ON public.messages;
 
 -- Create tenant-based RLS policies
 CREATE POLICY "tenant_isolation" ON public.profiles
-    USING (tenant_id = auth.current_tenant_id())
-    WITH CHECK (tenant_id = auth.current_tenant_id());
+    USING (tenant_id = public.current_tenant_id())
+    WITH CHECK (tenant_id = public.current_tenant_id());
 
 CREATE POLICY "tenant_isolation" ON public.chats
-    USING (tenant_id = auth.current_tenant_id())
-    WITH CHECK (tenant_id = auth.current_tenant_id());
+    USING (tenant_id = public.current_tenant_id())
+    WITH CHECK (tenant_id = public.current_tenant_id());
 
 CREATE POLICY "tenant_isolation" ON public.chat_users
-    USING (tenant_id = auth.current_tenant_id())
-    WITH CHECK (tenant_id = auth.current_tenant_id());
+    USING (tenant_id = public.current_tenant_id())
+    WITH CHECK (tenant_id = public.current_tenant_id());
 
 CREATE POLICY "tenant_isolation" ON public.messages
-    USING (tenant_id = auth.current_tenant_id())
-    WITH CHECK (tenant_id = auth.current_tenant_id());
+    USING (tenant_id = public.current_tenant_id())
+    WITH CHECK (tenant_id = public.current_tenant_id());
 
 CREATE POLICY "tenant_isolation" ON public.system_prompts
-    USING (tenant_id = auth.current_tenant_id())
-    WITH CHECK (tenant_id = auth.current_tenant_id());
+    USING (tenant_id = public.current_tenant_id())
+    WITH CHECK (tenant_id = public.current_tenant_id());
 
 -- Enable RLS on tenant tables
 ALTER TABLE public.tenants ENABLE ROW LEVEL SECURITY;
@@ -179,7 +180,7 @@ ALTER TABLE public.system_prompts ALTER COLUMN tenant_id SET NOT NULL;
 -- ============================================================================
 
 -- Grant tenant access functions to memories_role
-GRANT EXECUTE ON FUNCTION auth.current_tenant_id() TO memories_role;
+GRANT EXECUTE ON FUNCTION public.current_tenant_id() TO memories_role;
 
 -- Note: Individual memories.* tables will be tenant-enabled as they are created
 -- using the same pattern: tenant_id UUID NOT NULL REFERENCES public.tenants(id)

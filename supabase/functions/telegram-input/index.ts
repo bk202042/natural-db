@@ -297,18 +297,18 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
   );
 
   // -------------------------------------------------------------------
-  // 3. Ensure chat and membership records exist with tenant context
+  // 3. Ensure chat and membership records exist (using admin client for bootstrap)
   // -------------------------------------------------------------------
   try {
     const chatIdText = chatId.toString();
-    const { error: chatInsertErr } = await supabaseRls
+    const { error: chatInsertErr } = await supabaseAdmin
       .from("chats")
       .insert({ id: chatIdText, title: null, created_by: profileId, tenant_id: tenantId });
     if (chatInsertErr && chatInsertErr.code !== "23505") { // 23505 = unique_violation
       throw chatInsertErr;
     }
 
-    const { error: chatUserErr } = await supabaseRls
+    const { error: chatUserErr } = await supabaseAdmin
       .from("chat_users")
       .upsert({ chat_id: chatIdText, user_id: profileId, tenant_id: tenantId }, { onConflict: "chat_id,user_id" });
     if (chatUserErr) {

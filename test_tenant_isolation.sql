@@ -130,16 +130,16 @@ WHERE tenant_id = '22222222-2222-2222-2222-222222222222';
 
 -- Test with x-tenant-id header
 SET request.header.x-tenant-id = '11111111-1111-1111-1111-111111111111';
-SELECT 'header_method' as method, auth.current_tenant_id()::text as resolved_tenant_id;
+SELECT 'header_method' as method, public.current_tenant_id()::text as resolved_tenant_id;
 
 -- Test with different tenant
 SET request.header.x-tenant-id = '22222222-2222-2222-2222-222222222222';
-SELECT 'header_method' as method, auth.current_tenant_id()::text as resolved_tenant_id;
+SELECT 'header_method' as method, public.current_tenant_id()::text as resolved_tenant_id;
 
 -- Test with JWT claims (simulated)
 SET request.jwt.claims = '{"tenant_id": "11111111-1111-1111-1111-111111111111"}';
 RESET request.header.x-tenant-id;
-SELECT 'jwt_method' as method, auth.current_tenant_id()::text as resolved_tenant_id;
+SELECT 'jwt_method' as method, public.current_tenant_id()::text as resolved_tenant_id;
 
 -- ============================================================================
 -- TEST 4: Insert isolation test

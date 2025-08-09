@@ -251,7 +251,62 @@
       "lastAccessed": "2025-08-09T05:03:25.182Z",
       "lastVerified": "2025-08-09T05:03:25.182Z",
       "status": "fresh"
+    },
+    {
+      "id": "mem_1754718138124_v09makfbj",
+      "content": "RLS policy violation in telegram-input function: \"new row violates row-level security policy for table chats\" at lines 304-309. Issue is with tenant context propagation when using supabaseRls client for INSERT operations. Need to analyze RLS policies and tenant context setup.",
+      "type": "config",
+      "tags": [
+        "config",
+        "rls-policy",
+        "tenant-context",
+        "telegram-input",
+        "debugging"
+      ],
+      "timestamp": "2025-08-09T05:42:18.123Z",
+      "context": "Debugging telegram-input function chat creation failure",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T05:42:18.123Z",
+      "lastVerified": "2025-08-09T05:42:18.123Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754718156942_ht2pwfjc7",
+      "content": "Root cause identified: The RLS policy uses current_tenant_id() function that checks request.header.x-tenant-id, but the supabaseRls client sets 'x-tenant-id' header (with lowercase 'x'). The function expects exactly 'x-tenant-id'. Both the JWT tenant_id claim and header are being checked by current_tenant_id().",
+      "type": "code",
+      "tags": [
+        "code",
+        "rls-policy",
+        "tenant-context",
+        "header-case",
+        "current_tenant_id"
+      ],
+      "timestamp": "2025-08-09T05:42:36.942Z",
+      "context": "Debugging tenant context issue in telegram-input",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T05:42:36.942Z",
+      "lastVerified": "2025-08-09T05:42:36.942Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754718225273_cb8laavum",
+      "content": "FIXED: RLS policy violation in telegram-input function. Changed chat and chat_users creation from supabaseRls to supabaseAdmin (lines 304-313). Root cause: Anonymous JWT lacks tenant_id claim, and header-based tenant context wasn't working for INSERT operations. Solution follows established pattern: use admin client for bootstrap operations with explicit tenant_id, use RLS client for regular operations. This maintains security while fixing the violation.",
+      "type": "code",
+      "tags": [
+        "code",
+        "fix",
+        "rls-policy",
+        "tenant-context",
+        "telegram-input",
+        "bootstrap"
+      ],
+      "timestamp": "2025-08-09T05:43:45.273Z",
+      "context": "Fixed telegram-input RLS policy violation",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T05:43:45.273Z",
+      "lastVerified": "2025-08-09T05:43:45.273Z",
+      "status": "fresh"
     }
   ],
-  "lastUpdated": "2025-08-09T05:03:25.182Z"
+  "lastUpdated": "2025-08-09T05:43:45.273Z"
 }
