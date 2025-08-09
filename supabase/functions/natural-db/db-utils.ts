@@ -177,8 +177,14 @@ export interface SqlOutcome<T = unknown> {
 export async function executeRestrictedSQL<T = unknown>(
   text: string,
   args: unknown[] = [],
+  tenantId?: string,
 ): Promise<SqlOutcome<T[]>> {
   return handleLLMDbOperation("execute_restricted_sql", async (connection) => {
+    // Set tenant context if provided
+    if (tenantId) {
+      await connection.queryObject(`SET LOCAL request.header.x-tenant-id = '${tenantId}';`);
+    }
+    
     const result = await connection.queryObject({ text, args });
     return result.rows;
   });
@@ -347,21 +353,15 @@ export async function loadRecentMessages(
 // System function for inserting messages (uses public schema)
 export async function insertMessage(
   supabaseClient: any,
-  userId: string,
-  content: string,
-  role: string,
-  chatId?: string | number,
-  embedding?: string
+  messageData: {
+    user_id: string;
+    role: string;
+    content: string;
+    chat_id: string | number;
+    embedding?: string;
+  }
 ) {
   try {
-    const messageData = {
-      user_id: userId,
-      role,
-      content,
-      chat_id: chatId,
-      embedding
-    };
-
     const { data, error } = await supabaseClient
       .from("messages")
       .insert(messageData)

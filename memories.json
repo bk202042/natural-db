@@ -162,7 +162,96 @@
       "lastAccessed": "2025-08-09T03:45:16.022Z",
       "lastVerified": "2025-08-09T03:45:16.022Z",
       "status": "fresh"
+    },
+    {
+      "id": "mem_1754715282663_b96rxld62",
+      "content": "Task: Establish and enforce tenant context end-to-end (DB-first). This is the foundational requirement for all other features in PRD.md and Implementation.md. Need to implement: 1) DB tenant scaffolding with public.tenants, public.tenant_memberships tables, 2) Add tenant_id to all tenant-scoped tables with backfill strategy, 3) Implement auth.current_tenant_id() stable resolver, 4) Apply RLS policies across all tenant tables, 5) Make tenant propagation a hard invariant in Edge Functions, 6) Add smoke test for tenant isolation.",
+      "type": "config",
+      "tags": [
+        "config",
+        "tenant-isolation",
+        "security",
+        "database",
+        "rls"
+      ],
+      "timestamp": "2025-08-09T04:54:42.663Z",
+      "context": "Initial task analysis from docs review",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T04:54:42.663Z",
+      "lastVerified": "2025-08-09T04:54:42.663Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754715314074_6hwhtq8eu",
+      "content": "Current State Analysis: 1) DB has basic tables (profiles, chats, messages, system_prompts) but NO tenant_id columns, 2) No public.tenants or tenant_memberships tables exist, 3) No auth.current_tenant_id() function, 4) RLS policies exist but are user-based, not tenant-based, 5) Edge Functions have no tenant propagation logic, 6) No tenant isolation exists - this is a single-user system currently",
+      "type": "code",
+      "tags": [
+        "code",
+        "current-state",
+        "tenant-isolation",
+        "database"
+      ],
+      "timestamp": "2025-08-09T04:55:14.074Z",
+      "context": "After analyzing existing database schema and edge functions",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T04:55:14.074Z",
+      "lastVerified": "2025-08-09T04:55:14.074Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754715321481_4izy4sh84",
+      "content": "Key Requirements from Documentation: \n1) DB-first approach: Create tenant tables, add tenant_id to all tables, backfill in phases (nullable -> backfill -> indexes -> RLS -> NOT NULL)\n2) auth.current_tenant_id() stable resolver using JWT claims or x-tenant-id header\n3) RLS policies using tenant_id = auth.current_tenant_id() pattern\n4) Runtime tenant propagation: JWT with tenant_id preferred, x-tenant-id header fallback on all DB calls\n5) Apply to both public schema AND memories schema tables\n6) Smoke test with two tenants sharing chat_id to verify isolation",
+      "type": "concept",
+      "tags": [
+        "concept",
+        "requirements",
+        "tenant-isolation",
+        "implementation"
+      ],
+      "timestamp": "2025-08-09T04:55:21.481Z",
+      "context": "Key implementation requirements extracted from docs",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T04:55:21.481Z",
+      "lastVerified": "2025-08-09T04:55:21.481Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754715452445_fthjqgahe",
+      "content": "Migration Created: 20250809000000_add_tenant_isolation.sql with complete tenant infrastructure: 1) Core tables (tenants, tenant_memberships), 2) Stable resolver auth.current_tenant_id(), 3) Safe phased approach (nullable -> backfill -> indexes -> RLS -> NOT NULL), 4) All existing tables now have tenant_id with proper constraints and indexes, 5) RLS policies replaced with tenant-based isolation, 6) Default tenant created for existing data, 7) Verification functions included",
+      "type": "general",
+      "tags": [
+        "general",
+        "completed",
+        "migration",
+        "tenant-isolation",
+        "database"
+      ],
+      "timestamp": "2025-08-09T04:57:32.445Z",
+      "context": "Completed database migration for tenant isolation",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T04:57:32.445Z",
+      "lastVerified": "2025-08-09T04:57:32.445Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754715805182_qpwltx3tf",
+      "content": "TENANT ISOLATION IMPLEMENTATION COMPLETE: \n✅ Database migration with tenant tables, stable resolver, backfill strategy, and RLS policies\n✅ telegram-input updated to resolve and propagate tenant_id from profile lookup\n✅ natural-db updated to accept tenantId in payload and use tenant-aware Supabase clients  \n✅ telegram-outgoing updated to validate tenant membership before message delivery\n✅ db-utils updated to support tenant context in executeRestrictedSQL and message operations\n✅ Comprehensive smoke test created to verify two tenants with same chat_id cannot access each other's data\n✅ All Edge Functions now propagate tenant context end-to-end via x-tenant-id headers\n\nNEXT STEPS: Apply migration, test system, then implement the PRD.md and Implementation.md features on this tenant-safe foundation.",
+      "type": "general",
+      "tags": [
+        "general",
+        "database",
+        "completed",
+        "tenant-isolation",
+        "security",
+        "milestone"
+      ],
+      "timestamp": "2025-08-09T05:03:25.182Z",
+      "context": "Final completion summary of tenant isolation implementation",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T05:03:25.182Z",
+      "lastVerified": "2025-08-09T05:03:25.182Z",
+      "status": "fresh"
     }
   ],
-  "lastUpdated": "2025-08-09T03:45:16.022Z"
+  "lastUpdated": "2025-08-09T05:03:25.182Z"
 }

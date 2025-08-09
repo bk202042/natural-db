@@ -17,30 +17,12 @@ function isValidJobName(name: string): boolean {
   return JOB_NAME_REGEX.test(name);
 }
 
-interface ToolOptions {
-  id: string | number;
-  userId: string;
-  metadata: Record<string, unknown>;
-  timezone: string | null | undefined;
-  cronCallbackUrl: string;
-  callbackUrl: string;
-  updateSystemPrompt: (
-    chatId: string | number,
-    newPrompt: string,
-    description: string,
-  ) => Promise<{ success: boolean; error?: string }>;
-}
-
-export function createTools(opts: ToolOptions) {
-  const {
-    id,
-    userId,
-    metadata,
-    timezone,
-    cronCallbackUrl,
-    callbackUrl,
-    updateSystemPrompt,
-  } = opts;
+// Update createTools to accept the new signature from natural-db
+export function createTools(
+  supabase: any, 
+  chatId: string, 
+  tenantId: string
+) {
 
   return {
     execute_sql: tool({

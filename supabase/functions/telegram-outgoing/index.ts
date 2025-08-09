@@ -18,6 +18,7 @@ interface OutgoingPayload {
   metadata: {
     username?: string;
     chatId: string | number;
+    tenantId?: string;
   };
 }
 
@@ -64,10 +65,24 @@ Deno.serve(async (req) => {
       return new Response("Invalid request body", { status: 400 });
     }
 
+    const tenantId = metadata?.tenantId;
+    if (!tenantId) {
+      return new Response("Missing tenantId in metadata", { status: 400 });
+    }
+
+    // Create tenant-aware Supabase client
+    const tenantSupabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
+      global: {
+        headers: {
+          'x-tenant-id': tenantId,
+        },
+      },
+    });
+
     let username = metadata?.username;
     if (!username) {
       try {
-        const { data: prof, error: profErr } = await supabase
+        const { data: prof, error: profErr } = await tenantSupabase
           .from('profiles')
           .select('username')
           .eq('id', userId)
@@ -92,9 +107,9 @@ Deno.serve(async (req) => {
       return new Response("Missing chatId in metadata", { status: 400 });
     }
 
-    // Verify that the user is a member of the chat
+    // Verify that the user is a member of the chat within the correct tenant
     try {
-      const { data: membershipRow, error: membershipErr } = await supabase
+      const { data: membershipRow, error: membershipErr } = await tenantSupabase
         .from('chat_users')
         .select('chat_id')
         .eq('chat_id', chatId.toString())

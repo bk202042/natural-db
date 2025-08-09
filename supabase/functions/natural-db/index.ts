@@ -29,7 +29,16 @@ const openai = createOpenAI({
   compatibility: "strict"
 });
 
-const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+// Create tenant-aware Supabase client factory
+function createTenantSupabaseClient(tenantId: string) {
+  return createClient(supabaseUrl, supabaseServiceRoleKey, {
+    global: {
+      headers: {
+        'x-tenant-id': tenantId,
+      },
+    },
+  });
+}
 
 const MAX_CHAT_HISTORY = 10;
 const MAX_RELEVANT_MESSAGES = 5;
@@ -40,6 +49,7 @@ const IncomingPayloadSchema = z.object({
   userId: z.string(),
   metadata: z.record(z.unknown()).optional(),
   timezone: z.string().nullable().optional(),
+  tenantId: z.string().uuid(),
   incomingMessageRole: z.enum(["user", "assistant", "system", "system_routine_task"]),
   callbackUrl: z.string().url(),
 });
@@ -65,19 +75,89 @@ Deno.serve(async (req) => {
       return new Response("Invalid request body", { status: 400 });
     }
 
-    const { userPrompt, id, userId, incomingMessageRole } = parsed.data;
+    const { userPrompt, id, userId, tenantId, incomingMessageRole, timezone } = parsed.data;
     metadata = parsed.data.metadata || {};
     callbackUrl = parsed.data.callbackUrl;
 
-    // Generate AI response using OpenAI
+    // Create tenant-aware Supabase client
+    const supabase = createTenantSupabaseClient(tenantId);
+    
+    // Load recent and relevant messages with tenant context
+    const chatId = id.toString();
+    const { recentMessages, relevantMessages } = await loadRecentAndRelevantMessages(
+      supabase,
+      chatId,
+      userPrompt,
+      MAX_CHAT_HISTORY,
+      MAX_RELEVANT_MESSAGES
+    );
+
+    // Get system prompt for this chat with tenant context
+    const { data: systemPromptData } = await supabase
+      .from("system_prompts")
+      .select("prompt_content")
+      .eq("chat_id", chatId)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    const systemPrompt = systemPromptData?.prompt_content || 
+      `You are a helpful AI assistant with persistent memory. You are concise and friendly. 
+       The user's timezone is ${timezone || 'UTC'}. Current time: ${new Date().toISOString()}.
+       
+       You have access to tools for managing persistent memories and scheduling tasks. 
+       Use them when appropriate to help users with long-term needs.`;
+
+    // Create tools with tenant context
+    const tools = createTools(supabase, chatId, tenantId);
+
+    // Prepare messages array
+    const messages = [
+      ...recentMessages.map(msg => ({
+        role: msg.role as "user" | "assistant" | "system",
+        content: msg.content
+      })),
+      { role: "user" as const, content: userPrompt }
+    ];
+
+    // Add relevant historical messages if any
+    if (relevantMessages.length > 0) {
+      const contextMessage = "Here are some relevant previous conversations:\n" +
+        relevantMessages.map(msg => `${msg.role}: ${msg.content}`).join('\n') + 
+        "\n---\n";
+      
+      messages.unshift({ role: "system", content: contextMessage });
+    }
+
+    // Generate AI response with tools
     const result = await generateText({
       model: openai(openaiModel),
-      system: `You are a helpful AI assistant. You are concise and friendly. The user's timezone is ${parsed.data.timezone || 'UTC'}. Current time: ${new Date().toISOString()}.`,
-      messages: [{ role: "user", content: userPrompt }],
-      maxTokens: 1000,
+      system: systemPrompt,
+      messages,
+      tools,
+      maxSteps: 5,
+      maxTokens: 2000,
     });
 
     const finalResponse = result.text;
+
+    // Store the user message and AI response with tenant context
+    const userEmbedding = await generateEmbedding(userPrompt);
+    await insertMessage(supabase, {
+      user_id: userId,
+      role: incomingMessageRole,
+      content: userPrompt,
+      chat_id: chatId,
+      embedding: userEmbedding
+    });
+
+    const assistantEmbedding = await generateEmbedding(finalResponse);
+    await insertMessage(supabase, {
+      user_id: userId,
+      role: "assistant",
+      content: finalResponse,
+      chat_id: chatId,
+      embedding: assistantEmbedding
+    });
 
     // Call telegram-outgoing to send the response
     if (callbackUrl) {
@@ -85,7 +165,7 @@ Deno.serve(async (req) => {
         finalResponse,
         id,
         userId,
-        metadata: { ...metadata, userId },
+        metadata: { ...metadata, userId, tenantId },
       };
 
       await fetch(callbackUrl, {
@@ -116,7 +196,7 @@ Deno.serve(async (req) => {
             finalResponse: errorResponse,
             id: raw.id,
             userId: raw.userId,
-            metadata: { ...raw.metadata, userId: raw.userId },
+            metadata: { ...raw.metadata, userId: raw.userId, tenantId: raw.tenantId },
           }),
         });
       } catch (_) {

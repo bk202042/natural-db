@@ -30,6 +30,7 @@ interface ProcessAiPayload {
     chatId: string | number;
   };
   timezone: string | null;
+  tenantId: string;
   incomingMessageRole: string;
   callbackUrl: string;
 }
@@ -231,25 +232,17 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
   const newUserId = anonData.user.id;
   const accessToken = anonData.session.access_token;
 
-  const supabaseRls = createClient(
-    supabaseUrl,
-    supabaseAnonKey,
-    {
-      global: {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      },
-    },
-  );
-
   // -------------------------------------------------------------------
-  // 2. Ensure profiles row exists & belongs to this user
+  // 2. Ensure profiles row exists & belongs to this user + resolve tenant
   // -------------------------------------------------------------------
   let profileId: string | undefined;
   let userTimezone: string | null = null;
+  let tenantId: string;
+  
   try {
     const { data: existingProfiles, error: profErr } = await supabaseAdmin
       .from("profiles")
-      .select("id, auth_user_id, timezone")
+      .select("id, auth_user_id, timezone, tenant_id")
       .eq("service_id", telegramUserId)
       .maybeSingle();
 
@@ -258,6 +251,8 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
     }
 
     if (!existingProfiles) {
+      // For new profiles, use default tenant (will be properly assigned later)
+      const defaultTenantId = '00000000-0000-0000-0000-000000000001';
       const { data: insertProf, error: insErr } = await supabaseAdmin.from("profiles").insert({
         auth_user_id: newUserId,
         service_id: telegramUserId,
@@ -265,12 +260,15 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
         first_name: firstName,
         last_name: lastName,
         timezone: null,
-      }).select("id").single();
+        tenant_id: defaultTenantId,
+      }).select("id, tenant_id").single();
       if (insErr) throw insErr;
       profileId = insertProf.id;
+      tenantId = insertProf.tenant_id;
     } else {
       profileId = existingProfiles.id;
       userTimezone = existingProfiles.timezone || null;
+      tenantId = existingProfiles.tenant_id;
       if (existingProfiles.auth_user_id !== newUserId) {
         await supabaseAdmin.from("profiles").update({ auth_user_id: newUserId }).eq("id", profileId);
       }
@@ -284,21 +282,35 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
     return new Response("Profile not found", { status: 500 });
   }
 
+  // Create RLS client with tenant context after tenant is resolved
+  const supabaseRls = createClient(
+    supabaseUrl,
+    supabaseAnonKey,
+    {
+      global: {
+        headers: { 
+          Authorization: `Bearer ${accessToken}`,
+          'x-tenant-id': tenantId,
+        },
+      },
+    },
+  );
+
   // -------------------------------------------------------------------
-  // 3. Ensure chat and membership records exist
+  // 3. Ensure chat and membership records exist with tenant context
   // -------------------------------------------------------------------
   try {
     const chatIdText = chatId.toString();
     const { error: chatInsertErr } = await supabaseRls
       .from("chats")
-      .insert({ id: chatIdText, title: null, created_by: profileId });
+      .insert({ id: chatIdText, title: null, created_by: profileId, tenant_id: tenantId });
     if (chatInsertErr && chatInsertErr.code !== "23505") { // 23505 = unique_violation
       throw chatInsertErr;
     }
 
     const { error: chatUserErr } = await supabaseRls
       .from("chat_users")
-      .upsert({ chat_id: chatIdText, user_id: profileId }, { onConflict: "chat_id,user_id" });
+      .upsert({ chat_id: chatIdText, user_id: profileId, tenant_id: tenantId }, { onConflict: "chat_id,user_id" });
     if (chatUserErr) {
       throw chatUserErr;
     }
@@ -351,6 +363,7 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
           chatId,
         },
         timezone: null,
+        tenantId: tenantId,
         incomingMessageRole: "user",
       };
 
@@ -390,6 +403,7 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
           chatId,
         },
         timezone: userTimezone,
+        tenantId: tenantId,
         incomingMessageRole: "user",
         callbackUrl: callbackUrl,
       };
