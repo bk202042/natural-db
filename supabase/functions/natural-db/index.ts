@@ -162,6 +162,13 @@ Deno.serve(async (req) => {
       messages.unshift({ role: "system", content: contextMessage });
     }
 
+    // Debug: log tool schemas to diagnose schema errors
+    try {
+      const sampleTool = (tools as Record<string, unknown>)[Object.keys(tools)[0]] as unknown;
+      console.log("Tool keys:", Object.keys(tools));
+      console.log("First tool shape:", sampleTool);
+    } catch (_) {}
+
     // Generate AI response with tools
     const result = await generateText({
       model: openai.chat(openaiModel),
