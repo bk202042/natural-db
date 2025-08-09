@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js";
 import { createOpenAI } from "npm:@ai-sdk/openai";
-import { generateText, tool, jsonSchema } from "npm:ai";
+import { generateText, tool, zodSchema } from "npm:ai";
+import { z } from "npm:zod@3.25.76";
 import { z } from "npm:zod@3.25.76";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -328,14 +329,9 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
       const tools = {
         setTimezone: tool({
           description: "Set the user's timezone after determining it from their input",
-          inputSchema: jsonSchema({
-            type: "object",
-            properties: {
-              timezone: { type: "string", description: "Timezone in UTC format (e.g., 'UTC-5', 'UTC+1', 'UTC+5:30')" },
-            },
-            required: ["timezone"],
-            additionalProperties: false,
-          }),
+          parameters: zodSchema(z.object({
+            timezone: z.string().describe("Timezone in UTC format (e.g., 'UTC-5', 'UTC+1', 'UTC+5:30')"),
+          })),
           execute: async ({ timezone }: { timezone: string }): Promise<{ success: boolean; message: string }> => {
             const { error } = await supabaseAdmin
               .from("profiles")
