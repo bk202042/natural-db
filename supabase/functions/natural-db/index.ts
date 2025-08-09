@@ -147,6 +147,7 @@ Deno.serve(async (req) => {
       role: incomingMessageRole,
       content: userPrompt,
       chat_id: chatId,
+      tenant_id: tenantId,
       embedding: userEmbedding
     });
 
@@ -156,6 +157,7 @@ Deno.serve(async (req) => {
       role: "assistant",
       content: finalResponse,
       chat_id: chatId,
+      tenant_id: tenantId,
       embedding: assistantEmbedding
     });
 

@@ -358,6 +358,7 @@ export async function insertMessage(
     role: string;
     content: string;
     chat_id: string | number;
+    tenant_id: string;
     embedding?: string;
   }
 ) {
