@@ -436,7 +436,26 @@
       "lastAccessed": "2025-08-09T10:02:57.572Z",
       "lastVerified": "2025-08-09T10:02:57.572Z",
       "status": "fresh"
+    },
+    {
+      "id": "mem_1754734154362_z2r93bk9w",
+      "content": "Successfully fixed ZodError \"Invalid UUID\" by changing from z.string().uuid() to z.string().guid(). The issue was that z.uuid() enforces strict RFC 4122 validation which our default tenant ID '00000000-0000-0000-0000-000000000001' doesn't meet. z.guid() validates UUID-like identifiers without strict RFC constraints.",
+      "type": "troubleshooting",
+      "tags": [
+        "troubleshooting",
+        "solved",
+        "zod-validation",
+        "uuid-vs-guid",
+        "tenant-id",
+        "edge-functions"
+      ],
+      "timestamp": "2025-08-09T10:09:14.362Z",
+      "context": "Final resolution of tenantId validation error in natural-db Edge Function",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T10:09:14.362Z",
+      "lastVerified": "2025-08-09T10:09:14.362Z",
+      "status": "fresh"
     }
   ],
-  "lastUpdated": "2025-08-09T10:02:57.572Z"
+  "lastUpdated": "2025-08-09T10:09:14.362Z"
 }

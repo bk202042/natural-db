@@ -72,7 +72,7 @@ const IncomingPayloadSchema = z.object({
   userId: z.string(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   timezone: z.string().nullable().optional(),
-  tenantId: z.string().uuid(),
+  tenantId: z.string().guid(),
   incomingMessageRole: z.enum(["user", "assistant", "system", "system_routine_task"]),
   callbackUrl: z.string().url()
 });
