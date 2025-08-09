@@ -1,7 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js";
 import { createOpenAI } from "npm:@ai-sdk/openai";
-import { generateText, tool, zodSchema } from "npm:ai";
-import { z } from "npm:zod@3.25.76";
+import { generateText as _generateText, tool as _tool, zodSchema as _zodSchema } from "npm:ai";
 import { z } from "npm:zod@3.25.76";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -10,14 +9,14 @@ const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
 const telegramBotToken = Deno.env.get("TELEGRAM_BOT_TOKEN")!;
 const telegramWebhookSecret = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
 const openaiApiKey = Deno.env.get("OPENAI_API_KEY")!;
-const openaiModel = Deno.env.get("OPENAI_MODEL") || "gpt-4.1-mini";
+const _openaiModel = Deno.env.get("OPENAI_MODEL") || "gpt-4.1-mini";
 const allowedUsernames = Deno.env.get("ALLOWED_USERNAMES");
 
 if (!supabaseUrl || !supabaseServiceRoleKey || !telegramBotToken || !openaiApiKey || !supabaseAnonKey) {
   throw new Error("Missing required environment variables");
 }
 
-const openai = createOpenAI({ apiKey: openaiApiKey });
+const _openai = createOpenAI({ apiKey: openaiApiKey });
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey);
 
 interface ProcessAiPayload {
@@ -119,7 +118,7 @@ function isUsernameAllowed(username?: string): boolean {
   return allowedList.includes(username.toLowerCase());
 }
 
-const timezoneSystemPrompt = `You are a helpful assistant that helps users set their timezone for accurate time-based features.
+const _timezoneSystemPrompt = `You are a helpful assistant that helps users set their timezone for accurate time-based features.
 
 Your task: Help the user set their timezone using the setTimezone tool, then ask what you can help with.
 
@@ -315,6 +314,19 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
     if (chatUserErr) {
       throw chatUserErr;
     }
+
+    // Verify membership exists before proceeding
+    const { data: membershipRow, error: membershipReadErr } = await supabaseAdmin
+      .from("chat_users")
+      .select("chat_id")
+      .eq("chat_id", chatIdText)
+      .eq("user_id", profileId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (membershipReadErr || !membershipRow) {
+      console.error("Post-upsert membership missing:", { chatId: chatIdText, profileId, tenantId, membershipReadErr });
+      return new Response("Chat setup error", { status: 500 });
+    }
   } catch (chatErr) {
     console.error("Error ensuring chat records:", chatErr);
     return new Response("Chat setup error", { status: 500 });
@@ -326,67 +338,38 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
 
   if (!userTimezone) {
     try {
-      const tools = {
-        setTimezone: tool({
-          description: "Set the user's timezone after determining it from their input",
-          parameters: zodSchema(z.object({
-            timezone: z.string().describe("Timezone in UTC format (e.g., 'UTC-5', 'UTC+1', 'UTC+5:30')"),
-          })),
-          execute: async ({ timezone }: { timezone: string }): Promise<{ success: boolean; message: string }> => {
-            const { error } = await supabaseAdmin
-              .from("profiles")
-              .update({ timezone })
-              .eq("id", profileId);
-            if (error) {
-              return { success: false, message: "Failed to update timezone" };
-            }
-            return { success: true, message: `Timezone set to ${timezone}` };
-          },
-        }),
-      };
-
-      const result = await generateText({
-        model: openai.chat(openaiModel),
-        system: timezoneSystemPrompt,
-        messages: [{ role: "user", content: userPrompt }],
-        tools,
-      });
-
-      const outgoingPayload = {
-        finalResponse: result.text,
-        id: chatId,
-        userId: profileId,
-        metadata: {
-          platform: "telegram",
-          serviceId: telegramUserId,
-          username: username,
-          chatId,
-        },
-        timezone: null,
-        tenantId: tenantId,
-        incomingMessageRole: "user",
-      };
-
-      await fetch(callbackUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(outgoingPayload),
-      });
-
+      // Simple UTC offset parser: UTC+H, UTC-H, UTC+H:MM
+      const tzMatch = /^UTC([+-])(\d{1,2})(?::(\d{2}))?$/i.exec(userPrompt);
+      if (tzMatch) {
+        const sign = tzMatch[1] === '-' ? -1 : 1;
+        const hours = parseInt(tzMatch[2], 10);
+        const minutes = tzMatch[3] ? parseInt(tzMatch[3], 10) : 0;
+        if (hours <= 14 && minutes < 60) {
+          const normalized = `UTC${sign === -1 ? '-' : '+'}${hours}${minutes ? `:${String(minutes).padStart(2,'0')}` : ''}`;
+          const { error: tzErr } = await supabaseAdmin
+            .from("profiles")
+            .update({ timezone: normalized })
+            .eq("id", profileId);
+          if (!tzErr) {
+            await sendTelegramMessage(chatId, `Timezone set to ${normalized}. Thanks!`);
+            return new Response(
+              JSON.stringify({ status: "timezone_set" }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            );
+          }
+        }
+      }
+      await sendTelegramMessage(
+        chatId,
+        "I need your timezone first. Please send it in UTC format (e.g., 'UTC-5' or 'UTC+5:30').",
+      );
       return new Response(
-        JSON.stringify({ status: "timezone_setup_handled" }),
+        JSON.stringify({ status: "timezone_prompted" }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     } catch (err) {
       console.error("Timezone setup error:", err);
-      await sendTelegramMessage(
-        chatId,
-        "I need your timezone first. Please send it in UTC format (e.g., 'UTC-5').",
-      );
-      return new Response(
-        JSON.stringify({ status: "timezone_setup_error" }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+      return new Response("Timezone error", { status: 500 });
     }
   }
 
