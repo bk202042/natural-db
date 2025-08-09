@@ -455,7 +455,28 @@
       "lastAccessed": "2025-08-09T10:09:14.362Z",
       "lastVerified": "2025-08-09T10:09:14.362Z",
       "status": "fresh"
+    },
+    {
+      "id": "mem_1754734499242_0wrrs6hil",
+      "content": "Fixed two critical Edge Function errors: 1) Zod UUID validation issue resolved by changing z.string().uuid() to z.string().guid() for non-RFC-compliant tenant IDs, 2) User authorization error resolved - API logs show 200 status for chat_users queries when using proper user/chat relationships, 3) OpenAI tool schema issue addressed by improving empty parameter object handling with z.object({}).describe()",
+      "type": "troubleshooting",
+      "tags": [
+        "troubleshooting",
+        "api",
+        "edge-functions",
+        "debugging",
+        "zod-validation",
+        "openai-tools",
+        "tenant-isolation",
+        "authorization"
+      ],
+      "timestamp": "2025-08-09T10:14:59.241Z",
+      "context": "Comprehensive fix of natural-db Edge Function errors",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T10:14:59.241Z",
+      "lastVerified": "2025-08-09T10:14:59.241Z",
+      "status": "fresh"
     }
   ],
-  "lastUpdated": "2025-08-09T10:09:14.362Z"
+  "lastUpdated": "2025-08-09T10:14:59.241Z"
 }

@@ -195,7 +195,7 @@ export function createTools(
 
     fees_list_active: tool({
       description: "Lists all active fee reminders for the current chat.",
-      parameters: z.object({}),
+      parameters: z.object({}).describe("No parameters required"),
       execute: async () => {
         try {
           const result = await executeRestrictedSQL(
