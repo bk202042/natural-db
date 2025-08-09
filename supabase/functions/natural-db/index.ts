@@ -6,11 +6,10 @@ import {
   insertMessage,
   generateEmbedding
 } from "./db-utils.ts";
-import { createClient } from "npm:@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js";
 import { createTools } from "./tools.ts";
 
 // Type definitions to resolve conflicts
-import type { SupabaseClient } from "npm:@supabase/supabase-js";
 type MessageData = {
   user_id: string;
   role: string;
@@ -20,12 +19,27 @@ type MessageData = {
   embedding?: string;
 };
 
+// Type for loadRecentAndRelevantMessages function
+type LoadMessagesFunction = (
+  supabaseClient: SupabaseClient,
+  userId: string,
+  currentPrompt: string,
+  maxChatHistory: number,
+  maxRelevantMessages: number,
+  chatId: string | number,
+  tenantId: string
+) => Promise<{
+  chronologicalMessages: Array<{ role: string; content: string; created_at: string }>;
+  relevantContext: Array<{ role: string; content: string; created_at: string; similarity_score?: number }>;
+}>;
+
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
 const openaiApiKey = Deno.env.get("OPENAI_API_KEY")!;
 const openaiModel = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
 
-if (!supabaseUrl || !supabaseServiceRoleKey || !openaiApiKey) {
+if (!supabaseUrl || !supabaseServiceRoleKey || !supabaseAnonKey || !openaiApiKey) {
   throw new Error("Missing required environment variables");
 }
 
@@ -33,15 +47,20 @@ const openai = createOpenAI({
   apiKey: openaiApiKey
 });
 
-// Create tenant-aware Supabase client factory
+// Create tenant-aware Supabase client factory using anon key for RLS enforcement
 function createTenantSupabaseClient(tenantId: string) {
-  return createClient(supabaseUrl, supabaseServiceRoleKey, {
+  return createClient(supabaseUrl, supabaseAnonKey, {
     global: {
       headers: {
         'x-tenant-id': tenantId,
       },
     },
   });
+}
+
+// Create service-role client for privileged operations (migrations, cron, etc.)
+function _createServiceRoleClient() {
+  return createClient(supabaseUrl, supabaseServiceRoleKey);
 }
 
 const MAX_CHAT_HISTORY = 10;
@@ -88,20 +107,24 @@ Deno.serve(async (req) => {
     
     // Load recent and relevant messages with tenant context
     const chatId = id.toString();
-    const { chronologicalMessages: recentMessages, relevantContext: relevantMessages } = await loadRecentAndRelevantMessages(
+    // Call loadRecentAndRelevantMessages with all 7 required parameters
+    const messageResults = await (loadRecentAndRelevantMessages as LoadMessagesFunction)(
       supabase,
       userId,
       userPrompt,
       MAX_CHAT_HISTORY,
       MAX_RELEVANT_MESSAGES,
-      chatId
+      chatId,
+      tenantId
     );
+    const { chronologicalMessages: recentMessages, relevantContext: relevantMessages } = messageResults;
 
     // Get system prompt for this chat with tenant context
     const { data: systemPromptData } = await supabase
       .from("system_prompts")
       .select("prompt_content")
       .eq("chat_id", chatId)
+      .eq("tenant_id", tenantId)
       .eq("is_active", true)
       .maybeSingle();
 

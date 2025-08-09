@@ -241,24 +241,25 @@ export async function searchSimilarMessages(
   embedding: string,
   maxResults: number = 5,
   similarityThreshold: number = 0.7,
-  chatId?: string | number
+  chatId?: string | number,
+  tenantId?: string
 ) {
-  if (!chatId) {
+  if (!chatId || !tenantId) {
     return { result: [], error: null };
   }
 
   const result = await handleSystemDbOperation("search_similar_messages", async (connection) => {
-    // First verify user has access to this chat
+    // First verify user has access to this chat with tenant isolation
     const membershipCheck = await connection.queryObject({
-      text: `SELECT 1 FROM public.chat_users WHERE chat_id = $1 AND user_id = $2`,
-      args: [chatId.toString(), userId]
+      text: `SELECT 1 FROM public.chat_users WHERE chat_id = $1 AND user_id = $2 AND tenant_id = $3`,
+      args: [chatId.toString(), userId, tenantId]
     });
     
     if (membershipCheck.rows.length === 0) {
       return [];
     }
 
-    // Use parameterized query to safely pass the embedding vector
+    // Use parameterized query to safely pass the embedding vector with tenant filtering
     const result = await connection.queryObject({
       text: `
         SELECT m.role,
@@ -268,6 +269,7 @@ export async function searchSimilarMessages(
         FROM public.messages m
         LEFT JOIN public.profiles p ON p.auth_user_id = m.user_id
         WHERE chat_id = $2
+          AND tenant_id = $5
           AND embedding IS NOT NULL
           AND content IS NOT NULL
           AND content != ''
@@ -275,7 +277,7 @@ export async function searchSimilarMessages(
         ORDER BY m.embedding <=> $1
         LIMIT $4;
       `,
-      args: [embedding, chatId.toString(), similarityThreshold, maxResults]
+      args: [embedding, chatId.toString(), similarityThreshold, maxResults, tenantId]
     });
     return result.rows;
   });
@@ -288,19 +290,21 @@ export async function loadRecentMessages(
   supabaseClient: any,
   userId: string,
   limit: number = 10,
-  chatId?: string | number
+  chatId?: string | number,
+  tenantId?: string
 ) {
   try {
-    if (!chatId) {
+    if (!chatId || !tenantId) {
       return { result: [], error: null };
     }
 
-    // First verify user has access to this chat
+    // First verify user has access to this chat with tenant isolation
     const { data: membershipData, error: membershipError } = await supabaseClient
       .from("chat_users")
       .select("chat_id")
       .eq("chat_id", chatId.toString())
       .eq("user_id", userId)
+      .eq("tenant_id", tenantId)
       .maybeSingle();
 
     if (membershipError || !membershipData) {
@@ -311,6 +315,7 @@ export async function loadRecentMessages(
       .from("messages")
       .select("role, content, created_at, profiles ( first_name )")
       .eq("chat_id", chatId)
+      .eq("tenant_id", tenantId)
       .order("created_at", { ascending: false })
       .limit(limit);
 
@@ -400,16 +405,22 @@ export async function loadRecentAndRelevantMessages(
   supabaseClient: any,
   userId: string,
   currentPrompt: string,
-  maxChatHistory: number = 10,
-  maxRelevantMessages: number = 5,
-  chatId?: string | number
+  maxChatHistory: number,
+  maxRelevantMessages: number,
+  chatId: string | number,
+  tenantId: string
 ) {
   try {
+    if (!chatId || !tenantId) {
+      return { chronologicalMessages: [], relevantContext: [] };
+    }
+
     const recentResult = await loadRecentMessages(
       supabaseClient,
       userId,
       maxChatHistory,
-      chatId
+      chatId,
+      tenantId
     );
 
     if (recentResult.error) {
@@ -433,7 +444,8 @@ export async function loadRecentAndRelevantMessages(
           promptEmbedding,
           maxRelevantMessages,
           0.7,
-          chatId
+          chatId,
+          tenantId
         );
 
         if (similarMessagesResult.error) {

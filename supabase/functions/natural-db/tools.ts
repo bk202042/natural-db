@@ -17,6 +17,58 @@ function isValidJobName(name: string): boolean {
   return JOB_NAME_REGEX.test(name);
 }
 
+// Scheduling helper functions
+async function scheduleCron(jobName: string, cronExpression: string, payload: Record<string, unknown>, supabaseUrl: string): Promise<{ error?: string }> {
+  if (!isValidJobName(jobName)) {
+    return { error: "Invalid job name format" };
+  }
+
+  const escapedPayload = JSON.stringify(payload).replace(/'/g, "''");
+  const scheduleSQL = `SELECT cron.schedule('${jobName}', '${cronExpression}', $$ SELECT net.http_post(url := '${supabaseUrl}/functions/v1/natural-db', body := '${escapedPayload}'::jsonb, headers := '{"Content-Type": "application/json"}'::jsonb) $$);`;
+  
+  const result = await executePrivilegedSQL(scheduleSQL);
+  if (result.error) {
+    return { error: `Failed to schedule job: ${result.error}` };
+  }
+  
+  return {};
+}
+
+async function unscheduleCron(jobName: string): Promise<{ error?: string }> {
+  if (!isValidJobName(jobName)) {
+    return { error: "Invalid job name format" };
+  }
+
+  const unscheduleSQL = `SELECT cron.unschedule('${jobName}');`;
+  const result = await executePrivilegedSQL(unscheduleSQL);
+  
+  if (result.error) {
+    return { error: `Failed to unschedule job: ${result.error}` };
+  }
+  
+  return {};
+}
+
+// Email settings helper function
+async function getChatEmailSettings(tenantId: string, chatId: string): Promise<{ email?: string; email_enabled?: boolean; error?: string }> {
+  const result = await executeRestrictedSQL(
+    `SELECT email, email_enabled FROM notification_settings WHERE tenant_id = $1 AND chat_id = $2`,
+    [tenantId, chatId],
+    tenantId
+  );
+
+  if (result.error) {
+    return { error: `Failed to fetch email settings: ${result.error}` };
+  }
+
+  if (result.result?.length > 0) {
+    const settings = result.result[0];
+    return { email: settings.email, email_enabled: settings.email_enabled };
+  }
+
+  return { error: "No email settings found" };
+}
+
 // Create tenant-aware tools for the real estate CS bot
 export function createTools(
   supabase: any, 
@@ -103,7 +155,7 @@ export function createTools(
           const cronExpression = `0 9 ${due_day} * *`;
           const jobName = `fee_${chatId}_${feeId}`.replace(/[^a-zA-Z0-9_]/g, '_').substring(0, 50);
           
-          const cronPayload = JSON.stringify({
+          const cronPayload = {
             userPrompt: `Send a fee reminder for fee_id=${feeId} and chat_id=${chatId}`,
             id: chatId,
             userId: 'system',
@@ -111,12 +163,9 @@ export function createTools(
             tenantId: tenantId,
             incomingMessageRole: 'system_routine_task',
             callbackUrl: `${supabaseUrl}/functions/v1/telegram-outgoing`
-          });
+          };
 
-          const escapedPayload = cronPayload.replace(/'/g, "''");
-          const scheduleSQL = `SELECT cron.schedule('${jobName}', '${cronExpression}', $$ SELECT net.http_post(url := '${supabaseUrl}/functions/v1/natural-db', body := '${escapedPayload}'::jsonb, headers := '{"Content-Type": "application/json"}'::jsonb) $$);`;
-          
-          const scheduleResult = await executePrivilegedSQL(scheduleSQL);
+          const scheduleResult = await scheduleCron(jobName, cronExpression, cronPayload, supabaseUrl);
           if (scheduleResult.error) {
             return { error: `Fee created but scheduling failed: ${scheduleResult.error}` };
           }
@@ -233,9 +282,7 @@ export function createTools(
 
           if (jobResult.result?.length > 0) {
             const jobName = jobResult.result[0].cron_job_name;
-            const unscheduleResult = await executePrivilegedSQL(
-              `SELECT cron.unschedule('${jobName}');`
-            );
+            const unscheduleResult = await unscheduleCron(jobName);
             
             if (unscheduleResult.error) {
               return { error: `Fee cancelled but failed to unschedule job: ${unscheduleResult.error}` };
@@ -366,17 +413,11 @@ export function createTools(
           // Get email address if not provided
           let emailAddress = to;
           if (!emailAddress) {
-            const notificationResult = await executeRestrictedSQL(
-              `SELECT email FROM notification_settings WHERE tenant_id = $1 AND chat_id = $2`,
-              [tenantId, chatId],
-              tenantId
-            );
-
-            if (notificationResult.result?.length > 0) {
-              emailAddress = notificationResult.result[0].email;
-            } else {
+            const emailSettings = await getChatEmailSettings(tenantId, chatId);
+            if (emailSettings.error) {
               return { error: "No email address provided and no notification settings found" };
             }
+            emailAddress = emailSettings.email;
           }
 
           const subject = `Document Summary: ${doc.doc_type}`;
@@ -440,21 +481,14 @@ export function createTools(
           // Get email address if not provided
           let emailAddress = to;
           if (!emailAddress) {
-            const notificationResult = await executeRestrictedSQL(
-              `SELECT email, email_enabled FROM notification_settings WHERE tenant_id = $1 AND chat_id = $2`,
-              [tenantId, chatId],
-              tenantId
-            );
-
-            if (notificationResult.result?.length > 0) {
-              const settings = notificationResult.result[0];
-              if (!settings.email_enabled) {
-                return { error: "Email notifications are disabled for this chat" };
-              }
-              emailAddress = settings.email;
-            } else {
+            const emailSettings = await getChatEmailSettings(tenantId, chatId);
+            if (emailSettings.error) {
               return { error: "No email address provided and no notification settings found" };
             }
+            if (!emailSettings.email_enabled) {
+              return { error: "Email notifications are disabled for this chat" };
+            }
+            emailAddress = emailSettings.email;
           }
 
           // TODO: Implement actual email sending via Zapier MCP when available
