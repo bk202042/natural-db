@@ -268,7 +268,7 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
     } else {
       profileId = existingProfiles.id;
       userTimezone = existingProfiles.timezone || null;
-      tenantId = existingProfiles.tenant_id;
+      tenantId = existingProfiles.tenant_id || '00000000-0000-0000-0000-000000000001';
       if (existingProfiles.auth_user_id !== newUserId) {
         await supabaseAdmin.from("profiles").update({ auth_user_id: newUserId }).eq("id", profileId);
       }
