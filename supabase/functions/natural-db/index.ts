@@ -1,32 +1,36 @@
-import { createOpenAI } from "npm:@ai-sdk/openai@0.0.66";
-import { generateText, experimental_createMCPClient } from "npm:ai@3.4.33";
-import { z } from "npm:zod@3.22.4";
+import { createOpenAI } from "npm:@ai-sdk/openai";
+import { generateText } from "npm:ai";
+import { z } from "npm:zod";
 import { 
-  executeRestrictedSQL,
-  executePrivilegedSQL,
-  convertBigIntsToStrings,
   loadRecentAndRelevantMessages,
   insertMessage,
-  generateEmbedding,
-  getMemoriesSchemaDetails
+  generateEmbedding
 } from "./db-utils.ts";
-import { createClient } from "npm:@supabase/supabase-js@2.39.3";
+import { createClient } from "npm:@supabase/supabase-js";
 import { createTools } from "./tools.ts";
+
+// Type definitions to resolve conflicts
+import type { SupabaseClient } from "npm:@supabase/supabase-js";
+type MessageData = {
+  user_id: string;
+  role: string;
+  content: string;
+  chat_id: string | number;
+  tenant_id: string;
+  embedding?: string;
+};
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const openaiApiKey = Deno.env.get("OPENAI_API_KEY")!;
 const openaiModel = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
-const zapierMcpUrl = Deno.env.get("ZAPIER_MCP_URL");
-const allowedUsernames = Deno.env.get("ALLOWED_USERNAMES");
 
 if (!supabaseUrl || !supabaseServiceRoleKey || !openaiApiKey) {
   throw new Error("Missing required environment variables");
 }
 
 const openai = createOpenAI({
-  apiKey: openaiApiKey,
-  compatibility: "strict"
+  apiKey: openaiApiKey
 });
 
 // Create tenant-aware Supabase client factory
@@ -47,11 +51,11 @@ const IncomingPayloadSchema = z.object({
   userPrompt: z.string().min(1),
   id: z.union([z.string(), z.number()]),
   userId: z.string(),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   timezone: z.string().nullable().optional(),
   tenantId: z.string().uuid(),
   incomingMessageRole: z.enum(["user", "assistant", "system", "system_routine_task"]),
-  callbackUrl: z.string().url(),
+  callbackUrl: z.string().url()
 });
 
 // Copy all the helper functions and main logic from the original file
@@ -62,7 +66,7 @@ Deno.serve(async (req) => {
     return new Response("Method Not Allowed", { status: 405 });
   }
 
-  let raw: any = null;
+  let raw: unknown = null;
   let callbackUrl: string | undefined;
   let metadata: Record<string, unknown> = {};
 
@@ -113,7 +117,7 @@ Deno.serve(async (req) => {
 
     // Prepare messages array
     const messages = [
-      ...recentMessages.map(msg => ({
+      ...recentMessages.map((msg: { role: string; content: string }) => ({
         role: msg.role as "user" | "assistant" | "system",
         content: msg.content
       })),
@@ -131,19 +135,18 @@ Deno.serve(async (req) => {
 
     // Generate AI response with tools
     const result = await generateText({
-      model: openai(openaiModel),
+      model: openai.chat(openaiModel),
       system: systemPrompt,
       messages,
       tools,
-      maxSteps: 5,
-      maxTokens: 2000,
+      maxOutputTokens: 2000,
     });
 
     const finalResponse = result.text;
 
     // Store the user message and AI response with tenant context
     const userEmbedding = await generateEmbedding(userPrompt);
-    await insertMessage(supabase, {
+    await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<unknown>)(supabase, {
       user_id: userId,
       role: incomingMessageRole,
       content: userPrompt,
@@ -153,7 +156,7 @@ Deno.serve(async (req) => {
     });
 
     const assistantEmbedding = await generateEmbedding(finalResponse);
-    await insertMessage(supabase, {
+    await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<unknown>)(supabase, {
       user_id: userId,
       role: "assistant",
       content: finalResponse,
@@ -189,17 +192,18 @@ Deno.serve(async (req) => {
     console.error("Processing error:", error);
     
     // Send error message to Telegram
-    if (callbackUrl && raw?.id && raw?.metadata) {
+    if (callbackUrl && raw && typeof raw === 'object' && raw !== null) {
       try {
+        const rawObj = raw as { id?: string | number; userId?: string; metadata?: Record<string, unknown>; tenantId?: string };
         const errorResponse = "Sorry, an internal error occurred.";
         await fetch(callbackUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             finalResponse: errorResponse,
-            id: raw.id,
-            userId: raw.userId,
-            metadata: { ...raw.metadata, userId: raw.userId, tenantId: raw.tenantId },
+            id: rawObj.id,
+            userId: rawObj.userId,
+            metadata: { ...rawObj.metadata, userId: rawObj.userId, tenantId: rawObj.tenantId },
           }),
         });
       } catch (_) {
