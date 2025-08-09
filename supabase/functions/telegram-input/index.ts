@@ -1,6 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js";
 import { createOpenAI } from "npm:@ai-sdk/openai";
-import { generateText, tool } from "npm:ai";
+import { generateText, tool, jsonSchema } from "npm:ai";
 import { z } from "npm:zod@3.25.76";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -113,7 +113,7 @@ async function sendTelegramMessage(chatId: string | number, text: string): Promi
 function isUsernameAllowed(username?: string): boolean {
   if (!allowedUsernames) return true;
   if (!username) return false;
-  
+
   const allowedList = allowedUsernames.split(',').map(u => u.trim().toLowerCase());
   return allowedList.includes(username.toLowerCase());
 }
@@ -124,7 +124,7 @@ Your task: Help the user set their timezone using the setTimezone tool, then ask
 
 Timezone Processing:
 1. UTC Format: Accept directly (UTC-5, UTC+1, UTC+5:30)
-2. Location/City: Convert to UTC offset 
+2. Location/City: Convert to UTC offset
 3. Named Zones: Convert abbreviations (EST→UTC-5, PST→UTC-8, CET→UTC+1, JST→UTC+9, etc.)
 4. Unclear Input: Ask for clarification with examples
 
@@ -163,19 +163,19 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
     console.error("Invalid Telegram webhook payload:", parsed.error);
     return new Response("Bad Request", { status: 400 });
   }
-  
+
   const update = parsed.data;
 
   if (!telegramWebhookSecret) {
     console.error("SECURITY WARNING: TELEGRAM_WEBHOOK_SECRET not configured");
     return new Response("Service Unavailable", { status: 503 });
   }
-  
+
   const secretHeader = headers.get("X-Telegram-Bot-Api-Secret-Token");
   if (!secretHeader || secretHeader !== telegramWebhookSecret) {
-    console.warn("Webhook authentication failed", { 
+    console.warn("Webhook authentication failed", {
       hasSecret: !!secretHeader,
-      timestamp: new Date().toISOString() 
+      timestamp: new Date().toISOString()
     });
     return new Response("Forbidden", { status: 403 });
   }
@@ -238,7 +238,7 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
   let profileId: string | undefined;
   let userTimezone: string | null = null;
   let tenantId: string;
-  
+
   try {
     const { data: existingProfiles, error: profErr } = await supabaseAdmin
       .from("profiles")
@@ -288,7 +288,7 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
     supabaseAnonKey,
     {
       global: {
-        headers: { 
+        headers: {
           Authorization: `Bearer ${accessToken}`,
           'x-tenant-id': tenantId,
         },
@@ -328,10 +328,15 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
       const tools = {
         setTimezone: tool({
           description: "Set the user's timezone after determining it from their input",
-          parameters: z.object({
-            timezone: z.string().describe("Timezone in UTC format (e.g., 'UTC-5', 'UTC+1', 'UTC+5:30')"),
+          inputSchema: jsonSchema({
+            type: "object",
+            properties: {
+              timezone: { type: "string", description: "Timezone in UTC format (e.g., 'UTC-5', 'UTC+1', 'UTC+5:30')" },
+            },
+            required: ["timezone"],
+            additionalProperties: false,
           }),
-          execute: async ({ timezone }) => {
+          execute: async ({ timezone }: { timezone: string }): Promise<{ success: boolean; message: string }> => {
             const { error } = await supabaseAdmin
               .from("profiles")
               .update({ timezone })
@@ -345,11 +350,10 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
       };
 
       const result = await generateText({
-        model: openai.responses(openaiModel),
+        model: openai.chat(openaiModel),
         system: timezoneSystemPrompt,
         messages: [{ role: "user", content: userPrompt }],
         tools,
-        maxSteps: 3,
       });
 
       const outgoingPayload = {
@@ -410,6 +414,10 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
 
       const { error } = await supabaseRls.functions.invoke("natural-db", {
         body: payloadToAiDbHandler,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'x-tenant-id': tenantId,
+        },
       });
       if (error) {
         console.error("Error invoking natural-db:", error);
