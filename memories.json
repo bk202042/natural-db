@@ -306,7 +306,60 @@
       "lastAccessed": "2025-08-09T05:43:45.273Z",
       "lastVerified": "2025-08-09T05:43:45.273Z",
       "status": "fresh"
+    },
+    {
+      "id": "mem_1754719023376_vobztax7l",
+      "content": "Debugging TypeError in natural-db function: \"Cannot read properties of undefined (reading 'map')\" at line 89:25. The error occurs around loadRecentAndRelevantMessages call, suggesting either recentMessages or relevantMessages is undefined when .map() is called on them.",
+      "type": "code",
+      "tags": [
+        "code",
+        "debugging",
+        "natural-db",
+        "typescript",
+        "map-error"
+      ],
+      "timestamp": "2025-08-09T05:57:03.376Z",
+      "context": "natural-db Edge Function debugging - TypeError investigation",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T05:57:03.376Z",
+      "lastVerified": "2025-08-09T05:57:03.376Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754719036672_i2fp7byyt",
+      "content": "Found the bug! In index.ts line 87, loadRecentAndRelevantMessages is called with parameters (supabase, chatId, userPrompt, MAX_CHAT_HISTORY, MAX_RELEVANT_MESSAGES). But in db-utils.ts line 399, the function signature expects (supabaseClient, userId, currentPrompt, maxChatHistory, maxRelevantMessages, chatId). The parameters are in the wrong order - chatId and userId are swapped. Also, the function returns {chronologicalMessages, relevantContext} but index.ts expects {recentMessages, relevantMessages}.",
+      "type": "code",
+      "tags": [
+        "code",
+        "bug-found",
+        "parameter-mismatch",
+        "function-signature"
+      ],
+      "timestamp": "2025-08-09T05:57:16.672Z",
+      "context": "Root cause analysis of TypeError",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T05:57:16.672Z",
+      "lastVerified": "2025-08-09T05:57:16.672Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754719062385_0bl1t7ls7",
+      "content": "FIXED: TypeError \"Cannot read properties of undefined (reading 'map')\" in natural-db function. Two issues resolved: 1) Fixed parameter order in loadRecentAndRelevantMessages call - moved userId to correct position (2nd parameter) and chatId to end (6th parameter). 2) Fixed destructuring assignment to match actual return properties: {chronologicalMessages: recentMessages, relevantContext: relevantMessages} instead of {recentMessages, relevantMessages}. The function was returning undefined properties which caused the .map() error when code tried to iterate over them.",
+      "type": "code",
+      "tags": [
+        "code",
+        "bug-fix",
+        "typescript",
+        "natural-db",
+        "completed"
+      ],
+      "timestamp": "2025-08-09T05:57:42.385Z",
+      "context": "Bug fix completion - natural-db TypeError resolved",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-09T05:57:42.385Z",
+      "lastVerified": "2025-08-09T05:57:42.385Z",
+      "status": "fresh"
     }
   ],
-  "lastUpdated": "2025-08-09T05:43:45.273Z"
+  "lastUpdated": "2025-08-09T05:57:42.385Z"
 }

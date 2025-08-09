@@ -84,12 +84,13 @@ Deno.serve(async (req) => {
     
     // Load recent and relevant messages with tenant context
     const chatId = id.toString();
-    const { recentMessages, relevantMessages } = await loadRecentAndRelevantMessages(
+    const { chronologicalMessages: recentMessages, relevantContext: relevantMessages } = await loadRecentAndRelevantMessages(
       supabase,
-      chatId,
+      userId,
       userPrompt,
       MAX_CHAT_HISTORY,
-      MAX_RELEVANT_MESSAGES
+      MAX_RELEVANT_MESSAGES,
+      chatId
     );
 
     // Get system prompt for this chat with tenant context
