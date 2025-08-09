@@ -9,7 +9,7 @@ if (!telegramBotToken || !supabaseUrl || !supabaseServiceRoleKey) {
   throw new Error("Missing required environment variables");
 }
 
-const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
+const _supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
 interface OutgoingPayload {
   finalResponse: string;
@@ -114,6 +114,7 @@ Deno.serve(async (req) => {
         .select('chat_id')
         .eq('chat_id', chatId.toString())
         .eq('user_id', userId)
+        .eq('tenant_id', tenantId)
         .maybeSingle();
 
       if (membershipErr || !membershipRow) {
@@ -137,4 +138,4 @@ Deno.serve(async (req) => {
     console.error("Error processing request:", error);
     return new Response("Internal Server Error", { status: 500 });
   }
-}); 
+});

@@ -1,7 +1,7 @@
 import { createOpenAI } from "npm:@ai-sdk/openai";
 import { generateText } from "npm:ai";
 import { z } from "npm:zod@3.25.76";
-import { 
+import {
   loadRecentAndRelevantMessages,
   insertMessage,
   generateEmbedding
@@ -47,14 +47,15 @@ const openai = createOpenAI({
   apiKey: openaiApiKey
 });
 
-// Create tenant-aware Supabase client factory using anon key for RLS enforcement
-function createTenantSupabaseClient(tenantId: string) {
+// Create tenant-aware Supabase client factory.
+// If an access token is provided, include it so RLS policies that rely on auth.uid() also work.
+function createTenantSupabaseClient(tenantId: string, accessToken?: string) {
+  const headers: Record<string, string> = { 'x-tenant-id': tenantId };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
   return createClient(supabaseUrl, supabaseAnonKey, {
-    global: {
-      headers: {
-        'x-tenant-id': tenantId,
-      },
-    },
+    global: { headers },
   });
 }
 
@@ -92,7 +93,7 @@ Deno.serve(async (req) => {
   try {
     raw = await req.json();
     const parsed = IncomingPayloadSchema.safeParse(raw);
-    
+
     if (!parsed.success) {
       console.error("Invalid request body:", parsed.error);
       return new Response("Invalid request body", { status: 400 });
@@ -102,9 +103,14 @@ Deno.serve(async (req) => {
     metadata = parsedMetadata || {};
     callbackUrl = parsedCallbackUrl;
 
-    // Create tenant-aware Supabase client
-    const supabase = createTenantSupabaseClient(tenantId);
-    
+    // Create tenant-aware Supabase client, propagating the caller Authorization if present
+    const authHeader = req.headers.get("Authorization") || req.headers.get("authorization") || undefined;
+    const bearerPrefix = "Bearer ";
+    const accessToken = authHeader && authHeader.startsWith(bearerPrefix)
+      ? authHeader.slice(bearerPrefix.length)
+      : undefined;
+    const supabase = createTenantSupabaseClient(tenantId, accessToken);
+
     // Load recent and relevant messages with tenant context
     const chatId = typeof id === 'string' ? id : id.toString();
     // Call loadRecentAndRelevantMessages with all 7 required parameters
@@ -128,11 +134,11 @@ Deno.serve(async (req) => {
       .eq("is_active", true)
       .maybeSingle();
 
-    const systemPrompt = systemPromptData?.prompt_content || 
-      `You are a helpful AI assistant with persistent memory. You are concise and friendly. 
+    const systemPrompt = systemPromptData?.prompt_content ||
+      `You are a helpful AI assistant with persistent memory. You are concise and friendly.
        The user's timezone is ${timezone || 'UTC'}. Current time: ${new Date().toISOString()}.
-       
-       You have access to tools for managing persistent memories and scheduling tasks. 
+
+       You have access to tools for managing persistent memories and scheduling tasks.
        Use them when appropriate to help users with long-term needs.`;
 
     // Create tools with tenant context
@@ -150,9 +156,9 @@ Deno.serve(async (req) => {
     // Add relevant historical messages if any
     if (relevantMessages.length > 0) {
       const contextMessage = "Here are some relevant previous conversations:\n" +
-        relevantMessages.map(msg => `${msg.role}: ${msg.content}`).join('\n') + 
+        relevantMessages.map(msg => `${msg.role}: ${msg.content}`).join('\n') +
         "\n---\n";
-      
+
       messages.unshift({ role: "system", content: contextMessage });
     }
 
@@ -204,16 +210,16 @@ Deno.serve(async (req) => {
       });
     }
 
-    return new Response(JSON.stringify({ 
+    return new Response(JSON.stringify({
       status: "ai_processing_complete_for_id"
-    }), { 
+    }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
 
   } catch (error) {
     console.error("Processing error:", error);
-    
+
     // Send error message to Telegram
     if (callbackUrl && raw && typeof raw === 'object' && raw !== null) {
       try {

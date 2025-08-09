@@ -308,6 +308,13 @@ export async function loadRecentMessages(
       .maybeSingle();
 
     if (membershipError || !membershipData) {
+      console.error("Authorization check failed:", { 
+        chatId: chatId?.toString(), 
+        userId, 
+        tenantId, 
+        membershipError: membershipError?.message,
+        membershipData 
+      });
       return { result: [], error: "User not authorized for this chat" };
     }
 
