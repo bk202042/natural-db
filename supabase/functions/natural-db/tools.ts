@@ -1,5 +1,4 @@
-import { tool } from "npm:ai";
-import { z } from "npm:zod@3.25.76";
+import { tool, jsonSchema } from "npm:ai";
 import {
   executeRestrictedSQL,
   executePrivilegedSQL,
@@ -25,12 +24,12 @@ async function scheduleCron(jobName: string, cronExpression: string, payload: Re
 
   const escapedPayload = JSON.stringify(payload).replace(/'/g, "''");
   const scheduleSQL = `SELECT cron.schedule('${jobName}', '${cronExpression}', $$ SELECT net.http_post(url := '${supabaseUrl}/functions/v1/natural-db', body := '${escapedPayload}'::jsonb, headers := '{"Content-Type": "application/json"}'::jsonb) $$);`;
-  
+
   const result = await executePrivilegedSQL(scheduleSQL);
   if (result.error) {
     return { error: `Failed to schedule job: ${result.error}` };
   }
-  
+
   return {};
 }
 
@@ -41,11 +40,11 @@ async function unscheduleCron(jobName: string): Promise<{ error?: string }> {
 
   const unscheduleSQL = `SELECT cron.unschedule('${jobName}');`;
   const result = await executePrivilegedSQL(unscheduleSQL);
-  
+
   if (result.error) {
     return { error: `Failed to unschedule job: ${result.error}` };
   }
-  
+
   return {};
 }
 
@@ -61,8 +60,8 @@ async function getChatEmailSettings(tenantId: string, chatId: string): Promise<{
     return { error: `Failed to fetch email settings: ${result.error}` };
   }
 
-  if (result.result?.length > 0) {
-    const settings = result.result[0];
+  if ((result.result ?? []).length > 0) {
+    const settings = (result.result?.[0] as { email?: string; email_enabled?: boolean });
     return { email: settings.email, email_enabled: settings.email_enabled };
   }
 
@@ -71,8 +70,8 @@ async function getChatEmailSettings(tenantId: string, chatId: string): Promise<{
 
 // Create tenant-aware tools for the real estate CS bot
 export function createTools(
-  supabase: any, 
-  chatId: string, 
+  _supabase: unknown,
+  chatId: string,
   tenantId: string
 ) {
   // Get Supabase URL from environment for cron callbacks
@@ -82,43 +81,55 @@ export function createTools(
     execute_sql: tool({
       description:
         `Executes SQL within your private memories schema. Create tables directly (e.g., CREATE TABLE my_notes). You have full control over this isolated database space with tenant isolation.`,
-      parameters: z.object({
-        query: z.string().describe("SQL query (DML/DDL)."),
+      parameters: jsonSchema({
+        type: "object",
+        properties: {
+          query: { type: "string", description: "SQL query (DML/DDL)." },
+        },
+        required: ["query"],
+        additionalProperties: false,
       }),
-      execute: async ({ query }) => {
+      execute: async ({ query }: { query: string }) => {
         const result = await executeRestrictedSQL(query, [], tenantId);
         if (result.error) return { error: result.error };
 
         const trimmed = query.trim();
-        const rows = result.result ? convertBigIntsToStrings(result.result) : [];
-        if (trimmed.toUpperCase().startsWith("SELECT") || rows.length > 0) {
-          return JSON.stringify(rows);
+        const rows = (result.result ?? []) as unknown[];
+        const rowsConverted = convertBigIntsToStrings(rows);
+        if (trimmed.toUpperCase().startsWith("SELECT") || rowsConverted.length > 0) {
+          return JSON.stringify(rowsConverted);
         }
         return JSON.stringify({
           message: "Command executed successfully.",
-          rowCount: Number(result.result?.length || 0),
+          rowCount: Number((result.result ?? []).length || 0),
         });
       },
-    }),
+    } as any),
 
     get_distinct_column_values: tool({
       description:
         `Retrieves distinct values for a column within your private memories schema.`,
-      parameters: z.object({
-        table_name: z.string().describe("Table name."),
-        column_name: z.string().describe("Column name."),
+      parameters: jsonSchema({
+        type: "object",
+        properties: {
+          table_name: { type: "string", description: "Table name." },
+          column_name: { type: "string", description: "Column name." },
+        },
+        required: ["table_name", "column_name"],
+        additionalProperties: false,
       }),
-      execute: async ({ table_name, column_name }) => {
+      execute: async ({ table_name, column_name }: { table_name: string; column_name: string }) => {
         if (!isValidIdentifier(table_name) || !isValidIdentifier(column_name)) {
           return { error: "Invalid table or column name format." };
         }
         const query = `SELECT DISTINCT "${column_name}" FROM ${table_name};`;
         const result = await executeRestrictedSQL(query, [], tenantId);
         if (result.error) return { error: result.error };
-        const values = result.result.map((row: Record<string, unknown>) => row[column_name]);
+        const rows = (result.result ?? []) as Array<Record<string, unknown>>;
+        const values = rows.map((row) => row[column_name]);
         return { distinct_values: convertBigIntsToStrings(values) };
       },
-    }),
+    } as any),
 
     // ========================================================================
     // REAL ESTATE DOMAIN TOOLS (Tenant-Aware)
@@ -126,19 +137,24 @@ export function createTools(
 
     fees_create: tool({
       description: "Creates a recurring fee reminder with optional amount and note. Schedules monthly reminders and optionally sends email confirmation.",
-      parameters: z.object({
-        fee_type: z.enum(['electricity', 'management', 'water', 'other']).describe("Type of fee"),
-        due_day: z.number().int().min(1).max(31).describe("Day of month when fee is due (1-31)"),
-        amount: z.number().positive().optional().describe("Optional fee amount"),
-        currency: z.string().length(3).default('USD').optional().describe("Currency code (e.g. USD, EUR)"),
-        note: z.string().optional().describe("Optional note or description")
+      parameters: jsonSchema({
+        type: "object",
+        properties: {
+          fee_type: { type: "string", enum: ["electricity", "management", "water", "other"], description: "Type of fee" },
+          due_day: { type: "integer", minimum: 1, maximum: 31, description: "Day of month when fee is due (1-31)" },
+          amount: { type: "number", exclusiveMinimum: 0, description: "Optional fee amount" },
+          currency: { type: "string", minLength: 3, maxLength: 3, description: "Currency code (e.g. USD, EUR)" },
+          note: { type: "string", description: "Optional note or description" },
+        },
+        required: ["fee_type", "due_day"],
+        additionalProperties: false,
       }),
-      execute: async ({ fee_type, due_day, amount, currency = 'USD', note }) => {
+      execute: async ({ fee_type, due_day, amount, currency = 'USD', note }: { fee_type: 'electricity'|'management'|'water'|'other'; due_day: number; amount?: number; currency?: string; note?: string }) => {
         try {
           // Insert fee record with tenant context
           const insertFeeResult = await executeRestrictedSQL(
-            `INSERT INTO fees (tenant_id, chat_id, fee_type, due_day, amount, currency, note, is_active) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, true) 
+            `INSERT INTO fees (tenant_id, chat_id, fee_type, due_day, amount, currency, note, is_active)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, true)
              RETURNING id, fee_type, due_day, amount, currency, note`,
             [tenantId, chatId, fee_type, due_day, amount, currency, note],
             tenantId
@@ -148,13 +164,13 @@ export function createTools(
             return { error: `Failed to create fee: ${insertFeeResult.error}` };
           }
 
-          const fee = insertFeeResult.result[0];
+          const fee = ((insertFeeResult.result ?? [])[0] as { id: string });
           const feeId = fee.id;
 
           // Schedule monthly cron job at 9:00 AM on due day
           const cronExpression = `0 9 ${due_day} * *`;
           const jobName = `fee_${chatId}_${feeId}`.replace(/[^a-zA-Z0-9_]/g, '_').substring(0, 50);
-          
+
           const cronPayload = {
             userPrompt: `Send a fee reminder for fee_id=${feeId} and chat_id=${chatId}`,
             id: chatId,
@@ -188,20 +204,21 @@ export function createTools(
           return confirmationMessage;
 
         } catch (error) {
-          return { error: `Failed to create fee reminder: ${error.message}` };
+          const err = error as { message?: string };
+          return { error: `Failed to create fee reminder: ${err.message}` };
         }
       }
-    }),
+    } as any),
 
     fees_list_active: tool({
       description: "Lists all active fee reminders for the current chat.",
-      parameters: z.object({}).describe("No parameters required"),
+      parameters: jsonSchema({ type: "object", properties: {}, additionalProperties: false }),
       execute: async () => {
         try {
           const result = await executeRestrictedSQL(
-            `SELECT id, fee_type, due_day, amount, currency, note, created_at 
-             FROM fees 
-             WHERE tenant_id = $1 AND chat_id = $2 AND is_active = true 
+            `SELECT id, fee_type, due_day, amount, currency, note, created_at
+             FROM fees
+             WHERE tenant_id = $1 AND chat_id = $2 AND is_active = true
              ORDER BY due_day, fee_type`,
             [tenantId, chatId],
             tenantId
@@ -211,11 +228,12 @@ export function createTools(
             return { error: `Failed to list fees: ${result.error}` };
           }
 
-          if (result.result.length === 0) {
+          if ((result.result ?? []).length === 0) {
             return "No active fee reminders found.";
           }
 
-          const feesList = result.result.map(fee => {
+          const rows = (result.result ?? []) as Array<{ fee_type: string; due_day: number; amount?: number | null; currency?: string; note?: string | null }>;
+          const feesList = rows.map(fee => {
             let feeDesc = `• ${fee.fee_type} (day ${fee.due_day})`;
             if (fee.amount) {
               feeDesc += ` - ${fee.currency} ${fee.amount}`;
@@ -229,22 +247,28 @@ export function createTools(
           return `Active fee reminders:\n${feesList}`;
 
         } catch (error) {
-          return { error: `Failed to list active fees: ${error.message}` };
+          const err = error as { message?: string };
+          return { error: `Failed to list active fees: ${err.message}` };
         }
       }
-    }),
+    } as any),
 
     fees_cancel: tool({
       description: "Cancels an active fee reminder by fee type and due day.",
-      parameters: z.object({
-        fee_type: z.enum(['electricity', 'management', 'water', 'other']).describe("Type of fee to cancel"),
-        due_day: z.number().int().min(1).max(31).describe("Due day to help identify the specific fee")
+      parameters: jsonSchema({
+        type: "object",
+        properties: {
+          fee_type: { type: "string", enum: ["electricity", "management", "water", "other"], description: "Type of fee to cancel" },
+          due_day: { type: "integer", minimum: 1, maximum: 31, description: "Due day to help identify the specific fee" },
+        },
+        required: ["fee_type", "due_day"],
+        additionalProperties: false,
       }),
-      execute: async ({ fee_type, due_day }) => {
+      execute: async ({ fee_type, due_day }: { fee_type: 'electricity'|'management'|'water'|'other'; due_day: number }) => {
         try {
           // Find the fee to cancel
           const feeResult = await executeRestrictedSQL(
-            `SELECT id, fee_type, due_day FROM fees 
+            `SELECT id, fee_type, due_day FROM fees
              WHERE tenant_id = $1 AND chat_id = $2 AND fee_type = $3 AND due_day = $4 AND is_active = true`,
             [tenantId, chatId, fee_type, due_day],
             tenantId
@@ -254,16 +278,16 @@ export function createTools(
             return { error: `Failed to find fee: ${feeResult.error}` };
           }
 
-          if (feeResult.result.length === 0) {
+          if ((feeResult.result ?? []).length === 0) {
             return `No active ${fee_type} fee found for day ${due_day}.`;
           }
 
-          const fee = feeResult.result[0];
+          const fee = ((feeResult.result ?? [])[0] as { id: string });
           const feeId = fee.id;
 
           // Mark fee as inactive
           const deactivateResult = await executeRestrictedSQL(
-            `UPDATE fees SET is_active = false, updated_at = NOW() 
+            `UPDATE fees SET is_active = false, updated_at = NOW()
              WHERE id = $1 AND tenant_id = $2`,
             [feeId, tenantId],
             tenantId
@@ -280,10 +304,10 @@ export function createTools(
             tenantId
           );
 
-          if (jobResult.result?.length > 0) {
-            const jobName = jobResult.result[0].cron_job_name;
+          if ((jobResult.result ?? []).length > 0) {
+            const jobName = (jobResult.result?.[0] as { cron_job_name: string }).cron_job_name;
             const unscheduleResult = await unscheduleCron(jobName);
-            
+
             if (unscheduleResult.error) {
               return { error: `Fee cancelled but failed to unschedule job: ${unscheduleResult.error}` };
             }
@@ -292,23 +316,29 @@ export function createTools(
           return `✅ ${fee_type} fee reminder for day ${due_day} has been cancelled.`;
 
         } catch (error) {
-          return { error: `Failed to cancel fee: ${error.message}` };
+          const err = error as { message?: string };
+          return { error: `Failed to cancel fee: ${err.message}` };
         }
       }
-    }),
+    } as any),
 
     docs_store: tool({
       description: "Stores a document (text or URL) for later parsing and retrieval.",
-      parameters: z.object({
-        doc_type: z.enum(['contract', 'invoice', 'other']).describe("Type of document"),
-        source_kind: z.enum(['text', 'url']).describe("Whether this is raw text or a URL"),
-        source_value: z.string().min(1).describe("The actual text content or URL")
+      parameters: jsonSchema({
+        type: "object",
+        properties: {
+          doc_type: { type: "string", enum: ["contract", "invoice", "other"], description: "Type of document" },
+          source_kind: { type: "string", enum: ["text", "url"], description: "Whether this is raw text or a URL" },
+          source_value: { type: "string", minLength: 1, description: "The actual text content or URL" },
+        },
+        required: ["doc_type", "source_kind", "source_value"],
+        additionalProperties: false,
       }),
-      execute: async ({ doc_type, source_kind, source_value }) => {
+      execute: async ({ doc_type, source_kind, source_value }: { doc_type: 'contract'|'invoice'|'other'; source_kind: 'text'|'url'; source_value: string }) => {
         try {
           const result = await executeRestrictedSQL(
-            `INSERT INTO documents (tenant_id, chat_id, doc_type, source_kind, source_value) 
-             VALUES ($1, $2, $3, $4, $5) 
+            `INSERT INTO documents (tenant_id, chat_id, doc_type, source_kind, source_value)
+             VALUES ($1, $2, $3, $4, $5)
              RETURNING id, doc_type, source_kind`,
             [tenantId, chatId, doc_type, source_kind, source_value],
             tenantId
@@ -318,28 +348,34 @@ export function createTools(
             return { error: `Failed to store document: ${result.error}` };
           }
 
-          const doc = result.result[0];
+          const doc = ((result.result ?? [])[0] as { id: string });
           return {
             message: `✅ ${doc_type} document stored successfully`,
             document_id: doc.id
           };
 
         } catch (error) {
-          return { error: `Failed to store document: ${error.message}` };
+          const err = error as { message?: string };
+          return { error: `Failed to store document: ${err.message}` };
         }
       }
-    }),
+    } as any),
 
     docs_parse: tool({
       description: "Parses a stored document using AI to extract structured information.",
-      parameters: z.object({
-        document_id: z.string().uuid().describe("ID of the document to parse")
+      parameters: jsonSchema({
+        type: "object",
+        properties: {
+          document_id: { type: "string", format: "uuid", description: "ID of the document to parse" },
+        },
+        required: ["document_id"],
+        additionalProperties: false,
       }),
-      execute: async ({ document_id }) => {
+      execute: async ({ document_id }: { document_id: string }) => {
         try {
           // Get the document
           const docResult = await executeRestrictedSQL(
-            `SELECT id, doc_type, source_kind, source_value FROM documents 
+            `SELECT id, doc_type, source_kind, source_value FROM documents
              WHERE id = $1 AND tenant_id = $2 AND chat_id = $3`,
             [document_id, tenantId, chatId],
             tenantId
@@ -349,12 +385,12 @@ export function createTools(
             return { error: `Failed to retrieve document: ${docResult.error}` };
           }
 
-          if (docResult.result.length === 0) {
+          if ((docResult.result ?? []).length === 0) {
             return { error: "Document not found" };
           }
 
-          const doc = docResult.result[0];
-          let textContent = doc.source_value;
+          const doc = ((docResult.result ?? [])[0] as { source_value: string; id: string; doc_type: string; source_kind: string });
+          const textContent = doc.source_value;
 
           // Simple parsing for now - extract basic info
           const parsed = {
@@ -383,35 +419,41 @@ export function createTools(
           return `✅ Document parsed successfully. Summary: ${parsed.summary}`;
 
         } catch (error) {
-          return { error: `Failed to parse document: ${error.message}` };
+          const err = error as { message?: string };
+          return { error: `Failed to parse document: ${err.message}` };
         }
       }
-    }),
+    } as any),
 
     docs_email_summary: tool({
       description: "Emails a summary of a parsed document (placeholder for MCP integration).",
-      parameters: z.object({
-        document_id: z.string().uuid().describe("ID of the document to summarize"),
-        to: z.string().email().optional().describe("Email address (optional, uses chat settings if not provided)")
+      parameters: jsonSchema({
+        type: "object",
+        properties: {
+          document_id: { type: "string", format: "uuid", description: "ID of the document to summarize" },
+          to: { type: "string", format: "email", description: "Email address (optional, uses chat settings if not provided)" },
+        },
+        required: ["document_id"],
+        additionalProperties: false,
       }),
-      execute: async ({ document_id, to }) => {
+      execute: async ({ document_id, to }: { document_id: string; to?: string }) => {
         try {
           // Get document and its parsed data
           const docResult = await executeRestrictedSQL(
-            `SELECT id, doc_type, source_kind, source_value, parsed FROM documents 
+            `SELECT id, doc_type, source_kind, source_value, parsed FROM documents
              WHERE id = $1 AND tenant_id = $2 AND chat_id = $3`,
             [document_id, tenantId, chatId],
             tenantId
           );
 
-          if (docResult.error || docResult.result.length === 0) {
+          if (docResult.error || (docResult.result ?? []).length === 0) {
             return { error: "Document not found" };
           }
 
-          const doc = docResult.result[0];
-          
+          const doc = ((docResult.result ?? [])[0] as { doc_type: string });
+
           // Get email address if not provided
-          let emailAddress = to;
+          let emailAddress = to as string | undefined;
           if (!emailAddress) {
             const emailSettings = await getChatEmailSettings(tenantId, chatId);
             if (emailSettings.error) {
@@ -425,26 +467,32 @@ export function createTools(
           return `✅ Document summary prepared for ${emailAddress}. Subject: ${subject}. (MCP email integration needed)`;
 
         } catch (error) {
-          return { error: `Failed to email document summary: ${error.message}` };
+          const err = error as { message?: string };
+          return { error: `Failed to email document summary: ${err.message}` };
         }
       }
-    }),
+    } as any),
 
     notifications_set_email_prefs: tool({
       description: "Sets email notification preferences for the current chat.",
-      parameters: z.object({
-        email: z.string().email().describe("Email address for notifications"),
-        email_enabled: z.boolean().default(true).describe("Whether to enable email notifications"),
-        calendar_provider: z.enum(['google', 'outlook']).default('google').describe("Preferred calendar provider"),
-        default_reminder_minutes: z.number().int().min(1).default(60).describe("Default reminder time before due date in minutes")
+      parameters: jsonSchema({
+        type: "object",
+        properties: {
+          email: { type: "string", format: "email", description: "Email address for notifications" },
+          email_enabled: { type: "boolean", description: "Whether to enable email notifications" },
+          calendar_provider: { type: "string", enum: ["google", "outlook"], description: "Preferred calendar provider" },
+          default_reminder_minutes: { type: "integer", minimum: 1, description: "Default reminder time before due date in minutes" },
+        },
+        required: ["email"],
+        additionalProperties: false,
       }),
-      execute: async ({ email, email_enabled, calendar_provider, default_reminder_minutes }) => {
+      execute: async ({ email, email_enabled, calendar_provider, default_reminder_minutes }: { email: string; email_enabled?: boolean; calendar_provider?: 'google'|'outlook'; default_reminder_minutes?: number }) => {
         try {
           const result = await executeRestrictedSQL(
             `INSERT INTO notification_settings (tenant_id, chat_id, email, email_enabled, calendar_provider, default_reminder_minutes, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, NOW())
-             ON CONFLICT (tenant_id, chat_id) 
-             DO UPDATE SET 
+             ON CONFLICT (tenant_id, chat_id)
+             DO UPDATE SET
                email = EXCLUDED.email,
                email_enabled = EXCLUDED.email_enabled,
                calendar_provider = EXCLUDED.calendar_provider,
@@ -459,27 +507,33 @@ export function createTools(
             return { error: `Failed to update notification settings: ${result.error}` };
           }
 
-          const settings = result.result[0];
+          const settings = ((result.result ?? [])[0] as { email: string; email_enabled: boolean; calendar_provider: string; default_reminder_minutes: number });
           return `✅ Email preferences updated: ${settings.email} (${settings.email_enabled ? 'enabled' : 'disabled'}), ${settings.calendar_provider} calendar, ${settings.default_reminder_minutes}min reminders`;
 
         } catch (error) {
-          return { error: `Failed to set email preferences: ${error.message}` };
+          const err = error as { message?: string };
+          return { error: `Failed to set email preferences: ${err.message}` };
         }
       }
-    }),
+    } as any),
 
     notifications_send_email: tool({
       description: "Sends an email notification (placeholder for MCP integration).",
-      parameters: z.object({
-        to: z.string().email().optional().describe("Recipient email (uses chat settings if not provided)"),
-        subject: z.string().describe("Email subject"),
-        html: z.string().optional().describe("HTML email body"),
-        text: z.string().optional().describe("Plain text email body")
+      parameters: jsonSchema({
+        type: "object",
+        properties: {
+          to: { type: "string", format: "email", description: "Recipient email (uses chat settings if not provided)" },
+          subject: { type: "string", description: "Email subject" },
+          html: { type: "string", description: "HTML email body" },
+          text: { type: "string", description: "Plain text email body" },
+        },
+        required: ["subject"],
+        additionalProperties: false,
       }),
-      execute: async ({ to, subject, html, text }) => {
+      execute: async ({ to, subject, html: _html, text: _text }: { to?: string; subject: string; html?: string; text?: string }) => {
         try {
           // Get email address if not provided
-          let emailAddress = to;
+          let emailAddress = to as string | undefined;
           if (!emailAddress) {
             const emailSettings = await getChatEmailSettings(tenantId, chatId);
             if (emailSettings.error) {
@@ -498,37 +552,43 @@ export function createTools(
           };
 
         } catch (error) {
-          return { error: `Failed to send email: ${error.message}` };
+          const err = error as { message?: string };
+          return { error: `Failed to send email: ${err.message}` };
         }
       }
-    }),
+    } as any),
 
     calendar_create_event_for_fee: tool({
       description: "Creates a calendar event for a fee reminder (placeholder for MCP integration).",
-      parameters: z.object({
-        fee_id: z.string().uuid().describe("ID of the fee to create calendar event for"),
-        title: z.string().optional().describe("Custom event title")
+      parameters: jsonSchema({
+        type: "object",
+        properties: {
+          fee_id: { type: "string", format: "uuid", description: "ID of the fee to create calendar event for" },
+          title: { type: "string", description: "Custom event title" },
+        },
+        required: ["fee_id"],
+        additionalProperties: false,
       }),
-      execute: async ({ fee_id, title }) => {
+      execute: async ({ fee_id, title }: { fee_id: string; title?: string }) => {
         try {
           // Get fee details
           const feeResult = await executeRestrictedSQL(
-            `SELECT fee_type, due_day, amount, currency, note FROM fees 
+            `SELECT fee_type, due_day, amount, currency, note FROM fees
              WHERE id = $1 AND tenant_id = $2 AND is_active = true`,
             [fee_id, tenantId],
             tenantId
           );
 
-          if (feeResult.error || feeResult.result.length === 0) {
+          if (feeResult.error || (feeResult.result ?? []).length === 0) {
             return { error: "Fee not found or inactive" };
           }
 
-          const fee = feeResult.result[0];
+          const fee = ((feeResult.result ?? [])[0] as { fee_type: string; due_day: number; amount?: number | null; currency?: string });
           const eventTitle = title || `${fee.fee_type} fee due${fee.amount ? ` (${fee.currency} ${fee.amount})` : ''}`;
 
           // TODO: Implement actual calendar event creation via Zapier MCP
           const externalEventId = `mock_event_${fee_id}_${Date.now()}`;
-          
+
           const result = await executeRestrictedSQL(
             `INSERT INTO fee_calendar_events (tenant_id, fee_id, external_event_id, provider)
              VALUES ($1, $2, $3, 'google')
@@ -544,21 +604,27 @@ export function createTools(
           return `✅ Calendar event prepared: "${eventTitle}" for ${fee.fee_type} fee on day ${fee.due_day}. (MCP integration needed for actual calendar creation)`;
 
         } catch (error) {
-          return { error: `Failed to create calendar event: ${error.message}` };
+          const err = error as { message?: string };
+          return { error: `Failed to create calendar event: ${err.message}` };
         }
       }
-    }),
+    } as any),
 
     calendar_cancel_event_for_fee: tool({
       description: "Cancels the calendar event for a fee reminder.",
-      parameters: z.object({
-        fee_id: z.string().uuid().describe("ID of the fee whose calendar event should be cancelled")
+      parameters: jsonSchema({
+        type: "object",
+        properties: {
+          fee_id: { type: "string", format: "uuid", description: "ID of the fee whose calendar event should be cancelled" },
+        },
+        required: ["fee_id"],
+        additionalProperties: false,
       }),
-      execute: async ({ fee_id }) => {
+      execute: async ({ fee_id }: { fee_id: string }) => {
         try {
           // Find the calendar event mapping
           const eventResult = await executeRestrictedSQL(
-            `SELECT id, external_event_id FROM fee_calendar_events 
+            `SELECT id, external_event_id FROM fee_calendar_events
              WHERE tenant_id = $1 AND fee_id = $2`,
             [tenantId, fee_id],
             tenantId
@@ -568,11 +634,11 @@ export function createTools(
             return { error: `Failed to find calendar event: ${eventResult.error}` };
           }
 
-          if (eventResult.result.length === 0) {
+          if ((eventResult.result ?? []).length === 0) {
             return "No calendar event found for this fee.";
           }
 
-          const event = eventResult.result[0];
+          const event = ((eventResult.result ?? [])[0] as { id: string; external_event_id: string });
 
           // TODO: Implement actual calendar event cancellation via Zapier MCP
           const deleteResult = await executeRestrictedSQL(
@@ -588,9 +654,10 @@ export function createTools(
           return `✅ Calendar event cancelled for fee (event ID: ${event.external_event_id})`;
 
         } catch (error) {
-          return { error: `Failed to cancel calendar event: ${error.message}` };
+          const err = error as { message?: string };
+          return { error: `Failed to cancel calendar event: ${err.message}` };
         }
       }
-    }),
+    } as any),
   };
 }
