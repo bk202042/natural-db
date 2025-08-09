@@ -81,7 +81,7 @@ export function createTools(
     execute_sql: tool({
       description:
         `Executes SQL within your private memories schema. Create tables directly (e.g., CREATE TABLE my_notes). You have full control over this isolated database space with tenant isolation.`,
-      parameters: jsonSchema({
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           query: { type: "string", description: "SQL query (DML/DDL)." },
@@ -104,12 +104,12 @@ export function createTools(
           rowCount: Number((result.result ?? []).length || 0),
         });
       },
-    } as any),
+    }),
 
     get_distinct_column_values: tool({
       description:
         `Retrieves distinct values for a column within your private memories schema.`,
-      parameters: jsonSchema({
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           table_name: { type: "string", description: "Table name." },
@@ -129,7 +129,7 @@ export function createTools(
         const values = rows.map((row) => row[column_name]);
         return { distinct_values: convertBigIntsToStrings(values) };
       },
-    } as any),
+    }),
 
     // ========================================================================
     // REAL ESTATE DOMAIN TOOLS (Tenant-Aware)
@@ -137,7 +137,7 @@ export function createTools(
 
     fees_create: tool({
       description: "Creates a recurring fee reminder with optional amount and note. Schedules monthly reminders and optionally sends email confirmation.",
-      parameters: jsonSchema({
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           fee_type: { type: "string", enum: ["electricity", "management", "water", "other"], description: "Type of fee" },
@@ -208,11 +208,11 @@ export function createTools(
           return { error: `Failed to create fee reminder: ${err.message}` };
         }
       }
-    } as any),
+    }),
 
     fees_list_active: tool({
       description: "Lists all active fee reminders for the current chat.",
-      parameters: jsonSchema({ type: "object", properties: {}, additionalProperties: false }),
+      inputSchema: jsonSchema({ type: "object", properties: {}, additionalProperties: false }),
       execute: async () => {
         try {
           const result = await executeRestrictedSQL(
@@ -251,11 +251,11 @@ export function createTools(
           return { error: `Failed to list active fees: ${err.message}` };
         }
       }
-    } as any),
+    }),
 
     fees_cancel: tool({
       description: "Cancels an active fee reminder by fee type and due day.",
-      parameters: jsonSchema({
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           fee_type: { type: "string", enum: ["electricity", "management", "water", "other"], description: "Type of fee to cancel" },
@@ -320,11 +320,11 @@ export function createTools(
           return { error: `Failed to cancel fee: ${err.message}` };
         }
       }
-    } as any),
+    }),
 
     docs_store: tool({
       description: "Stores a document (text or URL) for later parsing and retrieval.",
-      parameters: jsonSchema({
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           doc_type: { type: "string", enum: ["contract", "invoice", "other"], description: "Type of document" },
@@ -359,11 +359,11 @@ export function createTools(
           return { error: `Failed to store document: ${err.message}` };
         }
       }
-    } as any),
+    }),
 
     docs_parse: tool({
       description: "Parses a stored document using AI to extract structured information.",
-      parameters: jsonSchema({
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           document_id: { type: "string", format: "uuid", description: "ID of the document to parse" },
@@ -423,11 +423,11 @@ export function createTools(
           return { error: `Failed to parse document: ${err.message}` };
         }
       }
-    } as any),
+    }),
 
     docs_email_summary: tool({
       description: "Emails a summary of a parsed document (placeholder for MCP integration).",
-      parameters: jsonSchema({
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           document_id: { type: "string", format: "uuid", description: "ID of the document to summarize" },
@@ -471,11 +471,11 @@ export function createTools(
           return { error: `Failed to email document summary: ${err.message}` };
         }
       }
-    } as any),
+    }),
 
     notifications_set_email_prefs: tool({
       description: "Sets email notification preferences for the current chat.",
-      parameters: jsonSchema({
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           email: { type: "string", format: "email", description: "Email address for notifications" },
@@ -515,11 +515,11 @@ export function createTools(
           return { error: `Failed to set email preferences: ${err.message}` };
         }
       }
-    } as any),
+    }),
 
     notifications_send_email: tool({
       description: "Sends an email notification (placeholder for MCP integration).",
-      parameters: jsonSchema({
+      inputSchema: jsonSchema({
         type: "object",
         properties: {
           to: { type: "string", format: "email", description: "Recipient email (uses chat settings if not provided)" },
@@ -658,6 +658,6 @@ export function createTools(
           return { error: `Failed to cancel calendar event: ${err.message}` };
         }
       }
-    } as any),
+    }),
   };
 }
