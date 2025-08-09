@@ -13,23 +13,74 @@
 Create a new migration file under `supabase/migrations/` (e.g., `20250808_add_realestate_mvp.sql`).
 
 - memories.fees
-  - id UUID PK; chat_id TEXT; fee_type TEXT CHECK IN ('electricity','management','water','other'); amount NUMERIC NULL; currency TEXT NULL; due_day SMALLINT CHECK 1–31; note TEXT NULL; is_active BOOLEAN DEFAULT true; created_at/updated_at.
-  - Indexes: (chat_id), (is_active, chat_id).
+  - id UUID PK; tenant_id UUID; chat_id TEXT; fee_type TEXT CHECK IN ('electricity','management','water','other'); amount NUMERIC NULL; currency TEXT NULL; due_day SMALLINT CHECK 1–31; note TEXT NULL; is_active BOOLEAN DEFAULT true; created_at/updated_at.
+  - Indexes: (tenant_id), (tenant_id, chat_id), (is_active, tenant_id, chat_id).
 - memories.fee_jobs
-  - id UUID PK; fee_id UUID FK→memories.fees(id); cron_job_name TEXT UNIQUE NOT NULL; cron_expression TEXT NOT NULL; timezone TEXT NULL; created_at.
-  - Indexes: (fee_id), (cron_job_name).
+  - id UUID PK; tenant_id UUID; fee_id UUID FK→memories.fees(id); cron_job_name TEXT UNIQUE NOT NULL; cron_expression TEXT NOT NULL; timezone TEXT NULL; created_at.
+  - Indexes: (tenant_id), (tenant_id, fee_id), (cron_job_name).
 - memories.documents
-  - id UUID PK; chat_id TEXT; doc_type TEXT CHECK IN ('contract','invoice','other'); source_kind TEXT CHECK IN ('text','url'); source_value TEXT; parsed JSONB NULL; created_at.
-  - Indexes: (chat_id), (doc_type, chat_id).
+  - id UUID PK; tenant_id UUID; chat_id TEXT; doc_type TEXT CHECK IN ('contract','invoice','other'); source_kind TEXT CHECK IN ('text','url'); source_value TEXT; parsed JSONB NULL; created_at.
+  - Indexes: (tenant_id), (tenant_id, chat_id), (doc_type, tenant_id, chat_id).
 - memories.notification_settings
-  - chat_id TEXT PK; email TEXT NOT NULL; email_enabled BOOLEAN DEFAULT true; calendar_provider TEXT DEFAULT 'google'; default_reminder_minutes INT DEFAULT 60; created_at/updated_at.
+  - tenant_id UUID; chat_id TEXT PK; email TEXT NOT NULL; email_enabled BOOLEAN DEFAULT true; calendar_provider TEXT DEFAULT 'google'; default_reminder_minutes INT DEFAULT 60; created_at/updated_at.
+  - Indexes/uniques: (tenant_id), unique(tenant_id, chat_id).
 - memories.fee_calendar_events
-  - id UUID PK; fee_id UUID FK; external_event_id TEXT NOT NULL; external_calendar_id TEXT NULL; provider TEXT DEFAULT 'google'; created_at.
-  - Indexes: (fee_id), (external_event_id).
+  - id UUID PK; tenant_id UUID; fee_id UUID FK; external_event_id TEXT NOT NULL; external_calendar_id TEXT NULL; provider TEXT DEFAULT 'google'; created_at.
+  - Indexes: (tenant_id), (tenant_id, fee_id), (external_event_id).
 
 Notes:
 - Use same “LLM-owned schema” pattern as existing `memories` in the initial migration. Keep PII minimal (email only).
-- Keep all records keyed by `chat_id` for alignment with RLS-bound access and delivery paths.
+- Add `tenant_id` to all tenant-scoped tables above; during rollout, create columns as NULLABLE, backfill, index, enable RLS, then enforce `NOT NULL`.
+- Keep records keyed by both `tenant_id` and `chat_id` to align with RLS-bound access and delivery paths; add composite indexes accordingly.
+
+### Tenant scaffolding and RLS
+
+- Create core tenant tables:
+
+```sql
+create table if not exists public.tenants (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.tenant_memberships (
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  role text not null check (role in ('owner','admin','member')),
+  primary key (tenant_id, user_id),
+  created_at timestamptz default now()
+);
+```
+
+- Stable resolver (transaction-pool safe):
+
+```sql
+create or replace function auth.current_tenant_id() returns uuid
+language sql stable as $$
+  select coalesce(
+    nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'tenant_id',
+    current_setting('request.header.x-tenant-id', true)
+  )::uuid
+$$;
+```
+
+- RLS policy template (apply to all tenant tables, including `memories.*`):
+
+```sql
+alter table profiles enable row level security;
+create policy tenant_isolation on profiles using (tenant_id = auth.current_tenant_id());
+
+alter table chats enable row level security;
+create policy tenant_isolation on chats using (tenant_id = auth.current_tenant_id());
+
+alter table messages enable row level security;
+create policy tenant_isolation on messages using (tenant_id = auth.current_tenant_id());
+
+-- Repeat analogous policies for all memories.* tables you tenant-scope
+```
+
+- Backfill plan (per table): add nullable `tenant_id` → backfill via join from `chats` or membership mapping → add indexes → enable RLS + policies → set `NOT NULL`.
 
 ## Natural-DB Orchestrator (`supabase/functions/natural-db/index.ts`)
 - MCP client bootstrap:
@@ -37,6 +88,8 @@ Notes:
 - Tools wiring:
   - Inject `cronCallbackUrl` for scheduled posts as `supabaseUrl/functions/v1/natural-db` (self-callback) and `callbackUrl` for Telegram delivery as `supabaseUrl/functions/v1/telegram-outgoing`.
   - Compose `createTools` with new domain tools (fees_*, docs_*, notifications_*, calendar_*).
+  - Ensure DB clients include tenant context:
+    - Prefer JWT containing `tenant_id` claim; otherwise set `x-tenant-id` header on every request to Supabase/Postgres.
 - Intent routing (light):
   - Use existing model call to route natural language to tool invocations. Prefer tool-first approach; no heavy rule-based parsing needed.
   - Add a small system directive reminding the model of available domain tools and examples (from PRD).
@@ -45,12 +98,13 @@ Notes:
     - “Today: {fee_type} fee is due{, {amount} {currency}}{. {note}}.”
   - Post to `telegram-outgoing`.
   - If `email_enabled`, call `notifications_send_email` for the same reminder (Zapier MCP).
+  - Always propagate `tenant_id` in scheduled payloads and set `x-tenant-id` on follow-up DB calls.
 
 ## Tools layer (`supabase/functions/natural-db/tools.ts`)
 Add domain tools by composing with existing utilities (`executeRestrictedSQL`, `executePrivilegedSQL`) and cron wrappers. Keep validation with Zod per existing pattern.
 
 - fees_create({ fee_type, due_day, amount?, currency?, note? })
-  - Insert into `memories.fees` with `chat_id`.
+  - Insert into `memories.fees` with `tenant_id` and `chat_id`.
   - Compute monthly cron at 09:00 local; if `timezone` present in payload, convert to UTC hours; else run at UTC 09:00.
   - `schedule_prompt` with:
     - job_name: `fee_{feeId}` suffix per chat.
@@ -62,16 +116,16 @@ Add domain tools by composing with existing utilities (`executeRestrictedSQL`, `
   - Return a concise confirmation string to the model.
 
 - fees_list_active()
-  - SELECT active fees for current `chat_id`. Return a compact list for display.
+  - SELECT active fees for current `tenant_id` and `chat_id`. Return a compact list for display.
 
 - fees_cancel({ fee_id })
   - Mark `memories.fees.is_active = false`.
-  - Lookup `fee_jobs` by `fee_id`, call `unschedule_prompt(job_name)`.
+  - Lookup `fee_jobs` by `tenant_id` and `fee_id`, call `unschedule_prompt(job_name)`.
   - `calendar_cancel_event_for_fee({ fee_id })` and delete mapping row(s).
   - Return a concise confirmation.
 
 - docs_store({ doc_type, source_kind, source_value })
-  - Insert row in `memories.documents` with `chat_id`.
+  - Insert row in `memories.documents` with `tenant_id` and `chat_id`.
   - Return `{ document_id }`.
 
 - docs_parse({ document_id })
@@ -84,7 +138,7 @@ Add domain tools by composing with existing utilities (`executeRestrictedSQL`, `
   - Call `notifications_send_email` to deliver.
 
 - notifications_set_email_prefs({ email, email_enabled?, calendar_provider?, default_reminder_minutes? })
-  - Upsert `memories.notification_settings` by `chat_id`.
+  - Upsert `memories.notification_settings` by `tenant_id` and `chat_id`.
   - Validate email with a simple regex; return error for invalid emails.
 
 - notifications_send_email({ to?, subject, html?, text? })
@@ -109,17 +163,19 @@ Implementation notes:
 
 ## Telegram functions
 - `telegram-input/index.ts`:
-  - No structural changes required. It already:
+  - No structural changes required. Ensure tenant propagation:
     - validates webhook secret and allowlist,
     - bootstraps RLS-bound clients and chat membership,
-    - invokes `natural-db` with `{ userPrompt, id, userId, metadata, timezone, callbackUrl }`.
+    - resolves `tenant_id` for the chat and includes it in JWT or sets `x-tenant-id` header for downstream DB calls,
+    - invokes `natural-db` with `{ userPrompt, id, userId, metadata, timezone, tenant_id, callbackUrl }`.
 - `telegram-outgoing/index.ts`:
-  - No change needed; it already rechecks allowlist and membership, then posts to Telegram.
+  - No change needed; recheck allowlist and membership, and include `tenant_id` on any DB lookups if present.
 
 ## Configuration
 - Env vars:
   - `ZAPIER_MCP_URL` required to enable MCP-backed email/calendar.
   - Existing: `SUPABASE_*`, `TELEGRAM_*`, `OPENAI_API_KEY`, optional `OPENAI_MODEL`.
+  - Multi-tenancy: prefer JWT including `tenant_id`; if not feasible, ensure all Supabase clients set `x-tenant-id`.
 - Local dev:
   - `deno task dev` to start Supabase.
   - Apply migrations: `supabase db push`.
@@ -139,12 +195,12 @@ Implementation notes:
 
 ## Acceptance tests (MVP)
 - Save prefs → row in `memories.notification_settings`.
-- Create fee with email enabled →:
+- Create fee with email enabled (with tenant context) →:
   - fee row inserted; cron job scheduled; `fee_jobs` row present;
   - confirmation email sent (MCP);
   - calendar event created; `fee_calendar_events` row present.
 - Cron fire → Telegram reminder delivered; if email enabled, email reminder sent.
-- List fees → returns active reminders with correct details.
+- List fees → returns active reminders with correct details filtered by `tenant_id` and `chat_id`.
 - Cancel fee → `is_active=false`, cron unscheduled, external event canceled, confirmation message sent; optional email cancellation.
 - Documents → store text/URL; parse updates `parsed`; `docs_email_summary` sends email.
 
@@ -178,15 +234,27 @@ Implementation notes:
 
 ## Multi-Tenancy Architecture
 
-Your current system appears designed for single-user deployment. For real estate CS bots, you need tenant isolation and tenant-aware RLS across core tables.
+Adopt tenant isolation with a stable resolver and RLS template applied across core and `memories.*` tables. See above sections for table changes and orchestrator/tools/header wiring.
 
 ```sql
--- Add tenant isolation to all tables
-ALTER TABLE profiles ADD COLUMN tenant_id UUID;
-ALTER TABLE chats ADD COLUMN tenant_id UUID;
-ALTER TABLE messages ADD COLUMN tenant_id UUID;
+-- Stable resolver
+create or replace function auth.current_tenant_id() returns uuid
+language sql stable as $$
+  select coalesce(
+    nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'tenant_id',
+    current_setting('request.header.x-tenant-id', true)
+  )::uuid
+$$;
 
--- Create tenant-specific RLS policies
-CREATE POLICY "tenant_isolation" ON profiles
-    USING (tenant_id = (SELECT current_setting('app.current_tenant_id')::UUID));
+-- RLS policy template
+alter table profiles enable row level security;
+create policy tenant_isolation on profiles using (tenant_id = auth.current_tenant_id());
+
+alter table chats enable row level security;
+create policy tenant_isolation on chats using (tenant_id = auth.current_tenant_id());
+
+alter table messages enable row level security;
+create policy tenant_isolation on messages using (tenant_id = auth.current_tenant_id());
+
+-- Repeat analogous policies for memories.* tables
 ```
