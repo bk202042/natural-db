@@ -1,5 +1,5 @@
 import { tool } from "npm:ai";
-import { z } from "npm:zod";
+import { z } from "npm:zod@3.25.76";
 import {
   executeRestrictedSQL,
   executePrivilegedSQL,

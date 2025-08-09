@@ -1,7 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js";
 import { createOpenAI } from "npm:@ai-sdk/openai";
 import { generateText, tool } from "npm:ai";
-import { z } from "npm:zod";
+import { z } from "npm:zod@3.25.76";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;

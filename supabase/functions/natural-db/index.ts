@@ -1,6 +1,6 @@
 import { createOpenAI } from "npm:@ai-sdk/openai";
 import { generateText } from "npm:ai";
-import { z } from "npm:zod";
+import { z } from "npm:zod@3.25.76";
 import { 
   loadRecentAndRelevantMessages,
   insertMessage,
@@ -72,7 +72,7 @@ const IncomingPayloadSchema = z.object({
   userId: z.string(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   timezone: z.string().nullable().optional(),
-  tenantId: z.string().guid(),
+  tenantId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "Invalid UUID format"),
   incomingMessageRole: z.enum(["user", "assistant", "system", "system_routine_task"]),
   callbackUrl: z.string().url()
 });
@@ -98,15 +98,15 @@ Deno.serve(async (req) => {
       return new Response("Invalid request body", { status: 400 });
     }
 
-    const { userPrompt, id, userId, tenantId, incomingMessageRole, timezone } = parsed.data;
-    metadata = parsed.data.metadata || {};
-    callbackUrl = parsed.data.callbackUrl;
+    const { userPrompt, id, userId, tenantId, incomingMessageRole, timezone, metadata: parsedMetadata, callbackUrl: parsedCallbackUrl } = parsed.data;
+    metadata = parsedMetadata || {};
+    callbackUrl = parsedCallbackUrl;
 
     // Create tenant-aware Supabase client
     const supabase = createTenantSupabaseClient(tenantId);
     
     // Load recent and relevant messages with tenant context
-    const chatId = id.toString();
+    const chatId = typeof id === 'string' ? id : id.toString();
     // Call loadRecentAndRelevantMessages with all 7 required parameters
     const messageResults = await (loadRecentAndRelevantMessages as LoadMessagesFunction)(
       supabase,
@@ -144,7 +144,7 @@ Deno.serve(async (req) => {
         role: msg.role as "user" | "assistant" | "system",
         content: msg.content
       })),
-      { role: "user" as const, content: userPrompt }
+      { role: "user" as const, content: userPrompt as string }
     ];
 
     // Add relevant historical messages if any
@@ -168,23 +168,23 @@ Deno.serve(async (req) => {
     const finalResponse = result.text;
 
     // Store the user message and AI response with tenant context
-    const userEmbedding = await generateEmbedding(userPrompt);
+    const userEmbedding = await generateEmbedding(userPrompt as string);
     await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<unknown>)(supabase, {
-      user_id: userId,
-      role: incomingMessageRole,
-      content: userPrompt,
+      user_id: userId as string,
+      role: incomingMessageRole as string,
+      content: userPrompt as string,
       chat_id: chatId,
-      tenant_id: tenantId,
+      tenant_id: tenantId as string,
       embedding: userEmbedding
     });
 
     const assistantEmbedding = await generateEmbedding(finalResponse);
     await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<unknown>)(supabase, {
-      user_id: userId,
+      user_id: userId as string,
       role: "assistant",
       content: finalResponse,
       chat_id: chatId,
-      tenant_id: tenantId,
+      tenant_id: tenantId as string,
       embedding: assistantEmbedding
     });
 
