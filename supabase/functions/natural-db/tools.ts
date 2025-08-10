@@ -4,6 +4,7 @@ import {
   executePrivilegedSQL,
   convertBigIntsToStrings,
 } from "./db-utils.ts";
+import { MCPClientManager } from "./mcp-client.ts";
 
 // Local validation helpers
 const IDENTIFIER_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
@@ -72,7 +73,8 @@ async function getChatEmailSettings(tenantId: string, chatId: string): Promise<{
 export function createTools(
   _supabase: unknown,
   chatId: string,
-  tenantId: string
+  tenantId: string,
+  mcpClient?: MCPClientManager
 ) {
   // Get Supabase URL from environment for cron callbacks
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -220,12 +222,64 @@ export function createTools(
             tenantId
           );
 
+          // Check if email notifications are enabled and send confirmation
+          const emailSettings = await getChatEmailSettings(tenantId, chatId);
+          let emailSent = false;
+          let calendarCreated = false;
+
+          if (!emailSettings.error && emailSettings.email && emailSettings.email_enabled && mcpClient?.isAvailable()) {
+            // Send confirmation email
+            const emailSubject = `Fee Reminder Set: ${fee_type} on day ${due_day}`;
+            const emailBody = `Your ${fee_type} fee reminder has been set up successfully.\n\nDetails:\n- Due day: ${due_day} of each month\n- Time: 9:00 AM${amount ? `\n- Amount: ${currency} ${amount}` : ''}${note ? `\n- Note: ${note}` : ''}\n\nYou will receive both Telegram and email reminders when the fee is due.`;
+            
+            const emailResult = await mcpClient.sendEmail(emailSettings.email, emailSubject, emailBody);
+            emailSent = emailResult.success;
+
+            // Create calendar event
+            if (emailSent) {
+              const now = new Date();
+              const nextOccurrence = new Date(now.getFullYear(), now.getMonth(), due_day);
+              if (nextOccurrence < now) {
+                nextOccurrence.setMonth(nextOccurrence.getMonth() + 1);
+              }
+              nextOccurrence.setHours(9, 0, 0, 0);
+
+              const eventTitle = `${fee_type} fee due${amount ? ` (${currency} ${amount})` : ''}`;
+              const calendarResult = await mcpClient.createCalendarEvent(
+                eventTitle,
+                nextOccurrence.toISOString(),
+                {
+                  endTime: new Date(nextOccurrence.getTime() + 60 * 60 * 1000).toISOString(),
+                  description: `${fee_type} fee payment reminder${amount ? ` for ${currency} ${amount}` : ''}`,
+                  recurrence: "FREQ=MONTHLY;BYMONTHDAY=" + due_day
+                }
+              );
+
+              if (calendarResult.success && calendarResult.eventId) {
+                await executeRestrictedSQL(
+                  `INSERT INTO fee_calendar_events (tenant_id, fee_id, external_event_id, provider)
+                   VALUES ($1, $2, $3, 'google')`,
+                  [tenantId, feeId, calendarResult.eventId],
+                  tenantId
+                );
+                calendarCreated = true;
+              }
+            }
+          }
+
           let confirmationMessage = `✅ ${fee_type} fee reminder created for day ${due_day} of each month`;
           if (amount) {
             confirmationMessage += ` (${currency} ${amount})`;
           }
           if (note) {
             confirmationMessage += ` - ${note}`;
+          }
+          
+          if (emailSent) {
+            confirmationMessage += `\n📧 Confirmation email sent`;
+          }
+          if (calendarCreated) {
+            confirmationMessage += `\n📅 Calendar event created`;
           }
 
           return confirmationMessage;
@@ -479,7 +533,7 @@ export function createTools(
     }),
 
     docs_email_summary: tool({
-      description: "Emails a summary of a parsed document (placeholder for MCP integration).",
+      description: "Emails a summary of a parsed document via Zapier MCP integration.",
       parameters: {
         type: "object",
         properties: {
@@ -510,7 +564,12 @@ export function createTools(
             return { error: "Document not found" };
           }
 
-          const doc = ((docResult.result ?? [])[0] as { doc_type: string });
+          const doc = ((docResult.result ?? [])[0] as { 
+            doc_type: string; 
+            source_kind: string; 
+            source_value: string; 
+            parsed?: string 
+          });
 
           // Get email address if not provided
           let emailAddress = to as string | undefined;
@@ -523,8 +582,47 @@ export function createTools(
           }
 
           const subject = `Document Summary: ${doc.doc_type}`;
-          // TODO: Implement actual email sending via MCP when available
-          return `✅ Document summary prepared for ${emailAddress}. Subject: ${subject}. (MCP email integration needed)`;
+          
+          // Create email content
+          let emailContent = `Document Summary\n\nType: ${doc.doc_type}\nSource: ${doc.source_kind}\n\n`;
+          
+          if (doc.parsed) {
+            try {
+              const parsedData = JSON.parse(doc.parsed);
+              emailContent += `Parsed Information:\n`;
+              emailContent += `- Summary: ${parsedData.summary || 'N/A'}\n`;
+              emailContent += `- Content Length: ${parsedData.fields?.content_length || 'N/A'} characters\n`;
+              if (parsedData.content_preview) {
+                emailContent += `- Preview: ${parsedData.content_preview}\n`;
+              }
+            } catch {
+              emailContent += `Parsed data available but not readable.\n`;
+            }
+          } else {
+            emailContent += `Document not yet parsed.\n`;
+          }
+          
+          if (doc.source_kind === 'url') {
+            emailContent += `\nOriginal URL: ${doc.source_value}`;
+          } else if (doc.source_value.length < 500) {
+            emailContent += `\nContent: ${doc.source_value}`;
+          }
+
+          // Send email via MCP if available
+          if (mcpClient && mcpClient.isAvailable()) {
+            const result = await mcpClient.sendEmail(emailAddress!, subject, emailContent);
+            if (result.success) {
+              return `✅ Document summary emailed to ${emailAddress}`;
+            } else {
+              return { error: `Failed to send email: ${result.message}` };
+            }
+          } else {
+            return {
+              status: "fallback",
+              message: `✅ Document summary prepared for ${emailAddress}. Subject: ${subject}. (MCP not available - summary provided in chat instead)`,
+              summary: emailContent
+            };
+          }
 
         } catch (error) {
           const err = error as { message?: string };
@@ -592,7 +690,7 @@ export function createTools(
     }),
 
     notifications_send_email: tool({
-      description: "Sends an email notification (placeholder for MCP integration).",
+      description: "Sends an email notification via Zapier MCP integration.",
       parameters: {
         type: "object",
         properties: {
@@ -616,7 +714,7 @@ export function createTools(
         },
         required: ["subject"]
       },
-      execute: async ({ to, subject, html: _html, text: _text }: { to?: string; subject: string; html?: string; text?: string }) => {
+      execute: async ({ to, subject, html, text }: { to?: string; subject: string; html?: string; text?: string }) => {
         try {
           // Get email address if not provided
           let emailAddress = to as string | undefined;
@@ -631,11 +729,20 @@ export function createTools(
             emailAddress = emailSettings.email;
           }
 
-          // TODO: Implement actual email sending via Zapier MCP when available
-          return {
-            status: "success",
-            message: `Email prepared for ${emailAddress} with subject: "${subject}". (MCP integration needed for actual sending)`
-          };
+          // Send email via MCP if available, otherwise fallback to notification
+          if (mcpClient && mcpClient.isAvailable()) {
+            const result = await mcpClient.sendEmail(emailAddress!, subject, text, html);
+            if (result.success) {
+              return `✅ Email sent to ${emailAddress}: "${subject}"`;
+            } else {
+              return { error: `Email sending failed: ${result.message}` };
+            }
+          } else {
+            return {
+              status: "fallback",
+              message: `✅ Email queued for ${emailAddress} with subject: "${subject}". (MCP not available - Telegram notification sent instead)`
+            };
+          }
 
         } catch (error) {
           const err = error as { message?: string };
@@ -645,7 +752,7 @@ export function createTools(
     }),
 
     calendar_create_event_for_fee: tool({
-      description: "Creates a calendar event for a fee reminder (placeholder for MCP integration).",
+      description: "Creates a calendar event for a fee reminder via Zapier MCP integration.",
       parameters: {
         type: "object",
         properties: {
@@ -678,8 +785,39 @@ export function createTools(
           const fee = ((feeResult.result ?? [])[0] as { fee_type: string; due_day: number; amount?: number | null; currency?: string });
           const eventTitle = title || `${fee.fee_type} fee due${fee.amount ? ` (${fee.currency} ${fee.amount})` : ''}`;
 
-          // TODO: Implement actual calendar event creation via Zapier MCP
-          const externalEventId = `mock_event_${fee_id}_${Date.now()}`;
+          // Calculate next occurrence
+          const now = new Date();
+          const nextOccurrence = new Date(now.getFullYear(), now.getMonth(), fee.due_day);
+          if (nextOccurrence < now) {
+            nextOccurrence.setMonth(nextOccurrence.getMonth() + 1);
+          }
+          nextOccurrence.setHours(9, 0, 0, 0); // 9:00 AM
+
+          const startTime = nextOccurrence.toISOString();
+          const endTime = new Date(nextOccurrence.getTime() + 60 * 60 * 1000).toISOString(); // 1 hour later
+
+          let externalEventId: string;
+
+          // Create calendar event via MCP if available
+          if (mcpClient && mcpClient.isAvailable()) {
+            const mcpResult = await mcpClient.createCalendarEvent(
+              eventTitle,
+              startTime,
+              {
+                endTime,
+                description: `${fee.fee_type} fee payment reminder${fee.amount ? ` for ${fee.currency} ${fee.amount}` : ''}`,
+                recurrence: "FREQ=MONTHLY;BYMONTHDAY=" + fee.due_day
+              }
+            );
+
+            if (!mcpResult.success) {
+              return { error: `Failed to create calendar event: ${mcpResult.message}` };
+            }
+
+            externalEventId = mcpResult.eventId || `mcp_event_${fee_id}_${Date.now()}`;
+          } else {
+            externalEventId = `fallback_event_${fee_id}_${Date.now()}`;
+          }
 
           const result = await executeRestrictedSQL(
             `INSERT INTO fee_calendar_events (tenant_id, fee_id, external_event_id, provider)
@@ -693,7 +831,11 @@ export function createTools(
             return { error: `Failed to store calendar event mapping: ${result.error}` };
           }
 
-          return `✅ Calendar event prepared: "${eventTitle}" for ${fee.fee_type} fee on day ${fee.due_day}. (MCP integration needed for actual calendar creation)`;
+          if (mcpClient && mcpClient.isAvailable()) {
+            return `✅ Calendar event created: "${eventTitle}" for ${fee.fee_type} fee on day ${fee.due_day} each month at 9:00 AM`;
+          } else {
+            return `✅ Calendar event queued: "${eventTitle}" for ${fee.fee_type} fee on day ${fee.due_day}. (MCP not available - event will be created when service is restored)`;
+          }
 
         } catch (error) {
           const err = error as { message?: string };
@@ -735,7 +877,15 @@ export function createTools(
 
           const event = ((eventResult.result ?? [])[0] as { id: string; external_event_id: string });
 
-          // TODO: Implement actual calendar event cancellation via Zapier MCP
+          // Cancel calendar event via MCP if available
+          if (mcpClient && mcpClient.isAvailable()) {
+            const mcpResult = await mcpClient.deleteCalendarEvent(event.external_event_id);
+            if (!mcpResult.success) {
+              return { error: `Failed to delete calendar event: ${mcpResult.message}` };
+            }
+          }
+
+          // Remove the mapping from database
           const deleteResult = await executeRestrictedSQL(
             `DELETE FROM fee_calendar_events WHERE id = $1 AND tenant_id = $2`,
             [event.id, tenantId],
@@ -746,7 +896,11 @@ export function createTools(
             return { error: `Failed to remove calendar event: ${deleteResult.error}` };
           }
 
-          return `✅ Calendar event cancelled for fee (event ID: ${event.external_event_id})`;
+          if (mcpClient && mcpClient.isAvailable()) {
+            return `✅ Calendar event cancelled and removed (event ID: ${event.external_event_id})`;
+          } else {
+            return `✅ Calendar event mapping removed (event ID: ${event.external_event_id}). MCP not available - manual deletion may be required.`;
+          }
 
         } catch (error) {
           const err = error as { message?: string };

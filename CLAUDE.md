@@ -69,7 +69,10 @@ Set in Supabase Dashboard → Project Settings → Edge Functions:
 
 **Optional:**
 - `OPENAI_MODEL`: Model name (defaults to "gpt-4.1-mini")
-- `ZAPIER_MCP_URL`: MCP server URL for Zapier integrations
+
+**Zapier MCP Integration (Optional):**
+- `ZAPIER_MCP_URL`: MCP server URL for Zapier integrations (e.g., https://mcp.zapier.com/api/mcp/mcp)
+- `ZAPIER_MCP_AUTH_TOKEN`: Authorization token for Zapier MCP server
 
 ### Local Development
 Add to `.env.local`:

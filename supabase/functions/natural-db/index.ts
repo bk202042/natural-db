@@ -8,6 +8,7 @@ import {
 } from "./db-utils.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js";
 import { createTools } from "./tools.ts";
+import { MCPClientManager } from "./mcp-client.ts";
 
 // Type definitions to resolve conflicts
 type MessageData = {
@@ -179,9 +180,21 @@ Deno.serve(async (req) => {
        You have access to tools for managing persistent memories and scheduling tasks.
        Use them when appropriate to help users with long-term needs.`;
 
-    // Create tools with tenant context
-    console.log("Creating tools with tenant context:", { chatId, tenantId });
-    const tools = createTools(supabase, chatId, tenantId);
+    // Initialize MCP client if available
+    let mcpClient: MCPClientManager | undefined;
+    try {
+      mcpClient = MCPClientManager.getInstance();
+      if (!mcpClient.isAvailable()) {
+        await mcpClient.initialize();
+      }
+    } catch (error) {
+      console.error("MCP initialization failed:", error);
+      mcpClient = undefined;
+    }
+
+    // Create tools with tenant context and MCP client
+    console.log("Creating tools with tenant context:", { chatId, tenantId, mcpAvailable: mcpClient?.isAvailable() });
+    const tools = createTools(supabase, chatId, tenantId, mcpClient);
 
     // Prepare messages array
     const messages = [
