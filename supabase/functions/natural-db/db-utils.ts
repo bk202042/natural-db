@@ -413,6 +413,17 @@ export async function insertMessage(
   }
 ) {
   try {
+    // Set tenant context in the database session before inserting
+    const { error: contextError } = await supabaseClient.rpc('set_config', {
+      setting_name: 'request.header.x-tenant-id',
+      new_value: messageData.tenant_id,
+      is_local: true
+    });
+
+    if (contextError) {
+      console.warn("Failed to set tenant context:", contextError);
+    }
+
     const { data, error } = await supabaseClient
       .from("messages")
       .insert(messageData)

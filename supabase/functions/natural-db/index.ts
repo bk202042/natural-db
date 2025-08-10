@@ -125,6 +125,11 @@ Deno.serve(async (req) => {
       : undefined;
     
     const supabase = createTenantSupabaseClient(tenantId, accessToken);
+    
+    // Create service role client for privileged operations (message insertion)
+    const serviceRoleClient = createClient(supabaseUrl, supabaseServiceRoleKey, {
+      global: { headers: { 'x-tenant-id': tenantId } },
+    });
 
     // Load recent and relevant messages with tenant context
     const chatId = typeof id === 'string' ? id : id.toString();
@@ -315,7 +320,7 @@ Deno.serve(async (req) => {
     try {
       console.log("Storing user message...");
       const userEmbedding = await generateEmbedding(userPrompt as string);
-      await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<unknown>)(supabase, {
+      const userMessageResult = await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<{ result: unknown; error: string | null }>)(serviceRoleClient, {
         user_id: userId as string,
         role: incomingMessageRole as string,
         content: userPrompt as string,
@@ -324,9 +329,15 @@ Deno.serve(async (req) => {
         embedding: userEmbedding
       });
       
+      if (userMessageResult.error) {
+        console.error("User message insertion failed:", userMessageResult.error);
+      } else {
+        console.log("User message stored successfully");
+      }
+      
       console.log("Storing assistant message...");
       const assistantEmbedding = await generateEmbedding(finalResponse);
-      await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<unknown>)(supabase, {
+      const assistantMessageResult = await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<{ result: unknown; error: string | null }>)(serviceRoleClient, {
         user_id: userId as string,
         role: "assistant",
         content: finalResponse,
@@ -334,6 +345,12 @@ Deno.serve(async (req) => {
         tenant_id: tenantId as string,
         embedding: assistantEmbedding
       });
+      
+      if (assistantMessageResult.error) {
+        console.error("Assistant message insertion failed:", assistantMessageResult.error);
+      } else {
+        console.log("Assistant message stored successfully");
+      }
       
       console.log("Message storage complete");
     } catch (storageError: unknown) {
