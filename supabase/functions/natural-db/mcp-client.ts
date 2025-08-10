@@ -1,10 +1,10 @@
-// Zapier MCP Integration via OpenAI Responses API
-// This module provides MCP integration using OpenAI's generateText function
+// Zapier MCP Integration via AI SDK MCP Client
+// This module provides MCP integration using the new experimental MCP client
 // to integrate with Zapier's email and calendar services
 
 import { z } from "npm:zod@3.25.76";
 import { createOpenAI } from "npm:@ai-sdk/openai";
-import { generateText } from "npm:ai";
+import { generateText, experimental_createMCPClient } from "npm:ai";
 
 // Schemas for validation
 const EmailToolSchema = z.object({
@@ -30,11 +30,13 @@ interface MCPToolResult {
   eventId?: string;
 }
 
-// Zapier MCP Integration using OpenAI Responses API
+// Zapier MCP Integration using new AI SDK MCP Client
 class ZapierMCPClient {
   private readonly openai: ReturnType<typeof createOpenAI>;
   private readonly zapierMcpUrl: string;
   private readonly zapierAuthToken: string;
+  private mcpClient: any = null;
+  private tools: any = {};
   private available = false;
 
   constructor(openai: ReturnType<typeof createOpenAI>, zapierMcpUrl: string, zapierAuthToken: string) {
@@ -45,29 +47,43 @@ class ZapierMCPClient {
 
   async initialize(): Promise<boolean> {
     try {
-      // Test MCP connection by trying to list available tools
-      const testResult = await generateText({
-        model: this.openai.chat('gpt-4o-mini'),
-        tools: [
-          {
-            type: "mcp" as const,
-            serverLabel: "zapier",
-            serverUrl: this.zapierMcpUrl,
-            requireApproval: "never" as const,
-            headers: {
-              "Authorization": this.zapierAuthToken
-            }
+      console.log("Attempting MCP initialization with URL:", this.zapierMcpUrl);
+      console.log("Auth token present:", !!this.zapierAuthToken);
+      console.log("Auth token format:", this.zapierAuthToken?.substring(0, 20) + "...");
+      
+      // Create MCP client using the new experimental API
+      this.mcpClient = await experimental_createMCPClient({
+        transport: {
+          type: 'sse',
+          url: this.zapierMcpUrl,
+          headers: {
+            "Authorization": this.zapierAuthToken
           }
-        ],
-        messages: [{ role: "user", content: "List available Zapier tools and capabilities" }],
-        toolChoice: "required",
-        maxOutputTokens: 1000
+        }
       });
 
-      this.available = !!testResult?.text;
+      console.log("MCP client created successfully");
+
+      // Get tools from the MCP server
+      this.tools = await this.mcpClient.tools();
+      console.log("MCP tools retrieved:", Object.keys(this.tools));
+      
+      this.available = Object.keys(this.tools).length > 0;
+      console.log("MCP initialization result:", this.available);
+      
       return this.available;
     } catch (error) {
+      console.error("MCP initialization error:", error);
+      console.error("Error message:", error instanceof Error ? error.message : "Unknown error");
       this.available = false;
+      if (this.mcpClient) {
+        try {
+          await this.mcpClient.close();
+        } catch (closeError) {
+          console.error("Error closing MCP client:", closeError);
+        }
+        this.mcpClient = null;
+      }
       return false;
     }
   }
@@ -77,30 +93,32 @@ class ZapierMCPClient {
   }
 
   private async callMCPTool(toolName: string, args: Record<string, unknown>, prompt: string): Promise<MCPToolResult> {
+    if (!this.mcpClient || !this.available) {
+      return {
+        success: false,
+        message: "MCP client not available"
+      };
+    }
+
     try {
+      console.log(`Calling MCP tool: ${toolName} with args:`, args);
+      
       const result = await generateText({
         model: this.openai.chat('gpt-4o-mini'),
-        tools: [
-          {
-            type: "mcp" as const,
-            serverLabel: "zapier",
-            serverUrl: this.zapierMcpUrl,
-            requireApproval: "never" as const,
-            headers: {
-              "Authorization": this.zapierAuthToken
-            }
-          }
-        ],
+        tools: this.tools,
         messages: [{ role: "user", content: prompt }],
         toolChoice: "required",
         maxOutputTokens: 1000
       });
+
+      console.log(`MCP tool ${toolName} result:`, result.text?.substring(0, 200) + "...");
 
       return {
         success: true,
         message: result.text || "Tool executed successfully"
       };
     } catch (error) {
+      console.error(`MCP tool ${toolName} error:`, error);
       return {
         success: false,
         message: error instanceof Error ? error.message : "Unknown error"
@@ -175,6 +193,20 @@ class ZapierMCPClient {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       return { success: false, message };
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.mcpClient) {
+      try {
+        await this.mcpClient.close();
+        console.log("MCP client closed successfully");
+      } catch (error) {
+        console.error("Error closing MCP client:", error);
+      }
+      this.mcpClient = null;
+      this.tools = {};
+      this.available = false;
     }
   }
 }
@@ -258,6 +290,9 @@ export class MCPClientManager {
   }
 
   async shutdown(): Promise<void> {
+    if (this.client) {
+      await this.client.close();
+    }
     this.client = null;
   }
 }
