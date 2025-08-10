@@ -164,6 +164,18 @@ Deno.serve(async (req) => {
       relevantCount: relevantMessages.length 
     });
 
+    // Initialize MCP client if available (MUST be before system prompt)
+    let mcpClient: MCPClientManager | undefined;
+    try {
+      mcpClient = MCPClientManager.getInstance();
+      if (!mcpClient.isAvailable()) {
+        await mcpClient.initialize();
+      }
+    } catch (error) {
+      console.error("MCP initialization failed:", error);
+      mcpClient = undefined;
+    }
+
     // Get system prompt for this chat with tenant context
     const { data: systemPromptData } = await supabase
       .from("system_prompts")
@@ -209,18 +221,6 @@ Deno.serve(async (req) => {
        - "I've parsed your invoice and found the key details. Would you like me to email you a summary?"
 
        Be proactive in offering email and calendar features when available, and clear about Telegram-only functionality when MCP services are unavailable.`;
-
-    // Initialize MCP client if available
-    let mcpClient: MCPClientManager | undefined;
-    try {
-      mcpClient = MCPClientManager.getInstance();
-      if (!mcpClient.isAvailable()) {
-        await mcpClient.initialize();
-      }
-    } catch (error) {
-      console.error("MCP initialization failed:", error);
-      mcpClient = undefined;
-    }
 
     // Create tools with tenant context and MCP client
     console.log("Creating tools with tenant context:", { chatId, tenantId, mcpAvailable: mcpClient?.isAvailable() });
