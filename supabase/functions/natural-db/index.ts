@@ -142,13 +142,14 @@ Deno.serve(async (req) => {
         chatId,
         tenantId
       );
-    } catch (messageLoadError) {
+    } catch (messageLoadError: unknown) {
       console.error("Message loading failed:", messageLoadError);
       // Return early with simplified response if messages fail to load
+      const errorMessage = messageLoadError instanceof Error ? messageLoadError.message : "Unknown error";
       return new Response(JSON.stringify({
         status: "error",
         message: "Failed to load messages",
-        error: messageLoadError.message
+        error: errorMessage
       }), {
         status: 500,
         headers: { "Content-Type": "application/json" }
@@ -207,14 +208,15 @@ Deno.serve(async (req) => {
       
       // Check first tool's schema structure
       if (toolKeys.length > 0) {
-        const firstTool = (tools as Record<string, any>)[toolKeys[0]];
+        const firstTool = (tools as Record<string, unknown>)[toolKeys[0]];
+        const toolObj = firstTool as { parameters?: { type?: string } };
         console.log("First tool schema validation:", {
-          hasParameters: !!firstTool.parameters,
-          parametersType: firstTool.parameters?.type,
-          isValidSchema: firstTool.parameters?.type === "object"
+          hasParameters: !!toolObj.parameters,
+          parametersType: toolObj.parameters?.type,
+          isValidSchema: toolObj.parameters?.type === "object"
         });
       }
-    } catch (toolError) {
+    } catch (toolError: unknown) {
       console.error("Tool schema validation error:", toolError);
     }
 
@@ -230,9 +232,10 @@ Deno.serve(async (req) => {
       });
       finalResponse = result.text;
       console.log("OpenAI call successful");
-    } catch (openaiError) {
+    } catch (openaiError: unknown) {
       console.error("OpenAI call failed:", openaiError);
-      finalResponse = `Sorry, I encountered an error processing your request. Error: ${openaiError.message}`;
+      const errorMessage = openaiError instanceof Error ? openaiError.message : "Unknown error";
+      finalResponse = `Sorry, I encountered an error processing your request. Error: ${errorMessage}`;
     }
 
     // Store the user message and AI response with tenant context (with error handling)
@@ -260,7 +263,7 @@ Deno.serve(async (req) => {
       });
       
       console.log("Message storage complete");
-    } catch (storageError) {
+    } catch (storageError: unknown) {
       console.error("Message storage failed:", storageError);
       // Continue execution even if storage fails
     }
