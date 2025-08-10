@@ -167,27 +167,35 @@ Deno.serve(async (req) => {
     // Initialize MCP client if available (MUST be before system prompt)
     let mcpClient: MCPClientManager | undefined;
     try {
-      // Check environment variables first
+      // Check environment variables first with detailed logging
       const zapierMcpUrl = Deno.env.get("ZAPIER_MCP_URL");
       const zapierAuthToken = Deno.env.get("ZAPIER_MCP_AUTH_TOKEN");
       
-      console.log("MCP Environment check:", {
+      console.log("=== MCP Environment Debugging ===");
+      console.log("All environment variables (filtered):", {
+        ZAPIER_MCP_URL: zapierMcpUrl ? `${zapierMcpUrl.substring(0, 50)}...` : "NOT_SET",
+        ZAPIER_MCP_AUTH_TOKEN: zapierAuthToken ? `${zapierAuthToken.substring(0, 20)}...` : "NOT_SET",
         hasUrl: !!zapierMcpUrl,
         hasToken: !!zapierAuthToken,
         urlLength: zapierMcpUrl?.length || 0,
-        tokenLength: zapierAuthToken?.length || 0
+        tokenLength: zapierAuthToken?.length || 0,
+        urlMatches: zapierMcpUrl === "https://mcp.zapier.com/api/mcp/mcp",
+        tokenStartsWithBearer: zapierAuthToken?.startsWith("Bearer ") || false
       });
+      
+      // Additional environment debugging
+      const envDebug = Object.fromEntries(
+        Object.entries(Deno.env.toObject())
+          .filter(([key]) => key.includes("ZAPIER") || key.includes("MCP"))
+          .map(([key, value]) => [key, value ? `${value.substring(0, 20)}...` : "EMPTY"])
+      );
+      console.log("Zapier/MCP related env vars:", envDebug);
 
       mcpClient = MCPClientManager.getInstance();
-      console.log("MCP Client created, checking availability...");
+      console.log("MCP Client created, attempting initialization...");
       
-      if (!mcpClient.isAvailable()) {
-        console.log("MCP not available, attempting initialization...");
-        const initResult = await mcpClient.initialize();
-        console.log("MCP initialization result:", initResult);
-      } else {
-        console.log("MCP client already available");
-      }
+      const initResult = await mcpClient.initialize(openai);
+      console.log("MCP initialization result:", initResult);
       
       console.log("Final MCP status:", {
         available: mcpClient.isAvailable(),

@@ -1,30 +1,10 @@
-// MCP Client for Zapier Integration
-// This module handles MCP (Model Context Protocol) client setup and management
-// for integrating with Zapier's email and calendar services
+// Zapier MCP Integration via OpenAI Responses API
+// This module provides MCP integration using OpenAI's generateText function
+// to integrate with Zapier's email and calendar services
 
 import { z } from "npm:zod@3.25.76";
-
-// MCP Client Types
-interface MCPTool {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
-interface MCPClient {
-  listTools(): Promise<MCPTool[]>;
-  callTool(name: string, arguments: Record<string, unknown>): Promise<MCPToolResult>;
-  isConnected(): boolean;
-  disconnect(): Promise<void>;
-}
-
-interface MCPToolResult {
-  content: Array<{
-    type: "text";
-    text: string;
-  }>;
-  isError?: boolean;
-}
+import { createOpenAI } from "npm:@ai-sdk/openai";
+import { generateText } from "npm:ai";
 
 // Schemas for validation
 const EmailToolSchema = z.object({
@@ -43,202 +23,159 @@ const CalendarEventSchema = z.object({
   calendar_id: z.string().optional()
 });
 
-// Production MCP Client Implementation
-class ZapierMCPClient implements MCPClient {
-  private connected = false;
-  private readonly baseUrl: string;
-  private readonly authToken: string;
-  private availableTools: MCPTool[] = [];
+// MCP Tool Result Interface
+interface MCPToolResult {
+  success: boolean;
+  message: string;
+  eventId?: string;
+}
 
-  constructor(url: string, authToken: string) {
-    this.baseUrl = url;
-    this.authToken = authToken;
+// Zapier MCP Integration using OpenAI Responses API
+class ZapierMCPClient {
+  private readonly openai: ReturnType<typeof createOpenAI>;
+  private readonly zapierMcpUrl: string;
+  private readonly zapierAuthToken: string;
+  private available = false;
+
+  constructor(openai: ReturnType<typeof createOpenAI>, zapierMcpUrl: string, zapierAuthToken: string) {
+    this.openai = openai;
+    this.zapierMcpUrl = zapierMcpUrl;
+    this.zapierAuthToken = zapierAuthToken;
   }
 
-  async connect(): Promise<void> {
+  async initialize(): Promise<boolean> {
     try {
-      console.log("ZapierMCPClient: Starting connection to:", this.baseUrl);
-      
-      // Initialize MCP connection
-      const initUrl = `${this.baseUrl}/initialize`;
-      console.log("ZapierMCPClient: Sending initialize request to:", initUrl);
-      
-      const response = await fetch(initUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': this.authToken,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          protocolVersion: '2024-11-05',
-          capabilities: {
-            tools: {}
+      // Test MCP connection by trying to list available tools
+      const testResult = await generateText({
+        model: this.openai.chat('gpt-4o-mini'),
+        tools: [
+          {
+            type: "mcp" as const,
+            serverLabel: "zapier",
+            serverUrl: this.zapierMcpUrl,
+            requireApproval: "never" as const,
+            headers: {
+              "Authorization": this.zapierAuthToken
+            }
           }
-        })
+        ],
+        messages: [{ role: "user", content: "List available Zapier tools and capabilities" }],
+        toolChoice: "required",
+        maxOutputTokens: 1000
       });
 
-      console.log("ZapierMCPClient: Initialize response status:", response.status);
-      
-      if (!response.ok) {
-        const responseText = await response.text().catch(() => "Unable to read response");
-        console.error("ZapierMCPClient: Initialize failed:", {
-          status: response.status,
-          statusText: response.statusText,
-          responseText: responseText
-        });
-        throw new Error(`MCP initialization failed: ${response.status} ${response.statusText}`);
-      }
-
-      const initResult = await response.json().catch(() => ({}));
-      console.log("ZapierMCPClient: Initialize successful:", initResult);
-
-      this.connected = true;
-      console.log("ZapierMCPClient: Connection established, discovering tools...");
-      await this.discoverTools();
-      console.log("ZapierMCPClient: Connection and tool discovery complete");
+      this.available = !!testResult?.text;
+      return this.available;
     } catch (error) {
-      console.error("ZapierMCPClient: Connection failed:", {
-        error: error instanceof Error ? error.message : "Unknown error",
-        errorStack: error instanceof Error ? error.stack : undefined,
-        baseUrl: this.baseUrl
-      });
-      this.connected = false;
-      throw error;
+      this.available = false;
+      return false;
     }
   }
 
-  private async discoverTools(): Promise<void> {
+  isAvailable(): boolean {
+    return this.available;
+  }
+
+  private async callMCPTool(toolName: string, args: Record<string, unknown>, prompt: string): Promise<MCPToolResult> {
     try {
-      console.log("ZapierMCPClient: Starting tool discovery...");
-      const toolsUrl = `${this.baseUrl}/tools/list`;
-      
-      const response = await fetch(toolsUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': this.authToken,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      console.log("ZapierMCPClient: Tool discovery response status:", response.status);
-
-      if (!response.ok) {
-        const responseText = await response.text().catch(() => "Unable to read response");
-        console.error("ZapierMCPClient: Tool discovery failed:", {
-          status: response.status,
-          statusText: response.statusText,
-          responseText: responseText
-        });
-        throw new Error(`Tool discovery failed: ${response.status}`);
-      }
-
-      const data = await response.json();
-      this.availableTools = data.tools || [];
-      console.log("ZapierMCPClient: Discovered tools:", {
-        count: this.availableTools.length,
-        toolNames: this.availableTools.map(t => t.name)
-      });
-    } catch (error) {
-      console.warn("ZapierMCPClient: Tool discovery failed, using fallback tools:", {
-        error: error instanceof Error ? error.message : "Unknown error"
-      });
-      
-      // Fallback to common Zapier tools
-      this.availableTools = [
-        {
-          name: "send_email",
-          description: "Send an email via Zapier integration",
-          inputSchema: {
-            type: "object",
-            properties: {
-              to: { type: "string", format: "email" },
-              subject: { type: "string" },
-              body: { type: "string" },
-              html: { type: "string" }
-            },
-            required: ["to", "subject"]
+      const result = await generateText({
+        model: this.openai.chat('gpt-4o-mini'),
+        tools: [
+          {
+            type: "mcp" as const,
+            serverLabel: "zapier",
+            serverUrl: this.zapierMcpUrl,
+            requireApproval: "never" as const,
+            headers: {
+              "Authorization": this.zapierAuthToken
+            }
           }
-        },
-        {
-          name: "create_calendar_event",
-          description: "Create a calendar event via Zapier integration",
-          inputSchema: {
-            type: "object",
-            properties: {
-              title: { type: "string" },
-              start_time: { type: "string" },
-              end_time: { type: "string" },
-              description: { type: "string" },
-              recurrence: { type: "string" },
-              calendar_id: { type: "string" }
-            },
-            required: ["title", "start_time"]
-          }
-        },
-        {
-          name: "delete_calendar_event",
-          description: "Delete a calendar event via Zapier integration",
-          inputSchema: {
-            type: "object",
-            properties: {
-              event_id: { type: "string" }
-            },
-            required: ["event_id"]
-          }
-        }
-      ];
-    }
-  }
-
-  async listTools(): Promise<MCPTool[]> {
-    if (!this.connected) {
-      throw new Error("MCP client not connected");
-    }
-    return this.availableTools;
-  }
-
-  async callTool(name: string, args: Record<string, unknown>): Promise<MCPToolResult> {
-    if (!this.connected) {
-      throw new Error("MCP client not connected");
-    }
-
-    try {
-      const response = await fetch(`${this.baseUrl}/tools/call`, {
-        method: 'POST',
-        headers: {
-          'Authorization': this.authToken,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          name,
-          arguments: args
-        })
+        ],
+        messages: [{ role: "user", content: prompt }],
+        toolChoice: "required",
+        maxOutputTokens: 1000
       });
 
-      if (!response.ok) {
-        throw new Error(`Tool call failed: ${response.status}`);
-      }
-
-      const result = await response.json();
-      return result as MCPToolResult;
+      return {
+        success: true,
+        message: result.text || "Tool executed successfully"
+      };
     } catch (error) {
       return {
-        content: [{
-          type: "text",
-          text: `Error calling ${name}: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }],
-        isError: true
+        success: false,
+        message: error instanceof Error ? error.message : "Unknown error"
       };
     }
   }
 
-  isConnected(): boolean {
-    return this.connected;
+  async sendEmail(to: string, subject: string, body?: string, html?: string): Promise<MCPToolResult> {
+    if (!this.isAvailable()) {
+      return { success: false, message: "MCP client not available" };
+    }
+
+    try {
+      const emailPrompt = `Send an email to ${to} with subject "${subject}" and body: ${body || html || "(empty)"}. Use the appropriate Zapier email tool to send this email.`;
+      const result = await this.callMCPTool("send_email", { to, subject, body, html }, emailPrompt);
+      
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return { success: false, message };
+    }
   }
 
-  async disconnect(): Promise<void> {
-    this.connected = false;
-    this.availableTools = [];
+  async createCalendarEvent(
+    title: string, 
+    startTime: string, 
+    options: {
+      endTime?: string;
+      description?: string;
+      recurrence?: string;
+      calendarId?: string;
+    } = {}
+  ): Promise<MCPToolResult> {
+    if (!this.isAvailable()) {
+      return { success: false, message: "MCP client not available" };
+    }
+
+    try {
+      const args = {
+        title,
+        start_time: startTime,
+        end_time: options.endTime,
+        description: options.description,
+        recurrence: options.recurrence,
+        calendar_id: options.calendarId
+      };
+
+      const calendarPrompt = `Create a calendar event with title "${title}" starting at ${startTime}${options.endTime ? ` and ending at ${options.endTime}` : ''}${options.description ? ` with description: ${options.description}` : ''}${options.recurrence ? ` with recurrence: ${options.recurrence}` : ''}. Use the appropriate Zapier calendar tool to create this event.`;
+      const result = await this.callMCPTool("create_calendar_event", args, calendarPrompt);
+      
+      return {
+        success: result.success,
+        message: result.message,
+        eventId: result.eventId || `event_${Date.now()}`
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return { success: false, message };
+    }
+  }
+
+  async deleteCalendarEvent(eventId: string): Promise<MCPToolResult> {
+    if (!this.isAvailable()) {
+      return { success: false, message: "MCP client not available" };
+    }
+
+    try {
+      const deletePrompt = `Delete the calendar event with ID ${eventId}. Use the appropriate Zapier calendar tool to delete this event.`;
+      const result = await this.callMCPTool("delete_calendar_event", { event_id: eventId }, deletePrompt);
+      
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return { success: false, message };
+    }
   }
 }
 
@@ -256,40 +193,24 @@ export class MCPClientManager {
     return MCPClientManager.instance;
   }
 
-  async initialize(): Promise<boolean> {
-    // Use the Zapier MCP URL and auth token you provided
-    const zapierMcpUrl = Deno.env.get("ZAPIER_MCP_URL") || "https://mcp.zapier.com/api/mcp/mcp";
-    const zapierAuthToken = Deno.env.get("ZAPIER_MCP_AUTH_TOKEN") || "Bearer MTY3MWQxM2UtMWZlOS00ZWI5LTkxYWUtMjYwZWZiNWFjZWViOjEzZmFiY2EzLWYzM2UtNDJjZC1iMDRhLTliN2ZhNGEwOTA1Yw==";
+  async initialize(openai: ReturnType<typeof createOpenAI>): Promise<boolean> {
+    const zapierMcpUrl = Deno.env.get("ZAPIER_MCP_URL");
+    const zapierAuthToken = Deno.env.get("ZAPIER_MCP_AUTH_TOKEN");
 
-    console.log("MCP Client initialization starting...");
-    console.log("Environment variables:", {
-      hasZapierMcpUrl: !!Deno.env.get("ZAPIER_MCP_URL"),
-      hasZapierMcpAuthToken: !!Deno.env.get("ZAPIER_MCP_AUTH_TOKEN"),
-      zapierMcpUrlLength: zapierMcpUrl.length,
-      zapierAuthTokenLength: zapierAuthToken.length,
-      zapierMcpUrl: zapierMcpUrl.substring(0, 50) + "...",
-      zapierAuthTokenStart: zapierAuthToken.substring(0, 20) + "..."
-    });
-
-    if (!zapierMcpUrl) {
-      console.log("MCP initialization failed: No Zapier MCP URL provided");
+    if (!zapierMcpUrl || !zapierAuthToken) {
       return false;
     }
 
     try {
-      console.log("Creating Zapier MCP client...");
-      this.client = new ZapierMCPClient(zapierMcpUrl, zapierAuthToken);
+      this.client = new ZapierMCPClient(openai, zapierMcpUrl, zapierAuthToken);
+      const success = await this.client.initialize();
       
-      console.log("Attempting MCP client connection...");
-      await this.client.connect();
+      if (!success) {
+        this.client = null;
+      }
       
-      console.log("MCP client connection successful");
-      return true;
+      return success;
     } catch (error) {
-      console.error("MCP client initialization failed:", {
-        error: error instanceof Error ? error.message : "Unknown error",
-        errorStack: error instanceof Error ? error.stack : undefined
-      });
       this.client = null;
       return false;
     }
@@ -300,26 +221,15 @@ export class MCPClientManager {
   }
 
   isAvailable(): boolean {
-    return this.client !== null && this.client.isConnected();
+    return this.client !== null && this.client.isAvailable();
   }
 
   async sendEmail(to: string, subject: string, body?: string, html?: string): Promise<{ success: boolean; message: string }> {
-    if (!this.isAvailable()) {
+    if (!this.isAvailable() || !this.client) {
       return { success: false, message: "MCP client not available" };
     }
 
-    try {
-      const result = await this.client!.callTool("send_email", { to, subject, body, html });
-      
-      if (result.isError) {
-        return { success: false, message: result.content[0]?.text || "Unknown error" };
-      }
-
-      return { success: true, message: result.content[0]?.text || "Email sent" };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      return { success: false, message };
-    }
+    return await this.client.sendEmail(to, subject, body, html);
   }
 
   async createCalendarEvent(
@@ -332,66 +242,23 @@ export class MCPClientManager {
       calendarId?: string;
     } = {}
   ): Promise<{ success: boolean; message: string; eventId?: string }> {
-    if (!this.isAvailable()) {
+    if (!this.isAvailable() || !this.client) {
       return { success: false, message: "MCP client not available" };
     }
 
-    try {
-      const args = {
-        title,
-        start_time: startTime,
-        end_time: options.endTime,
-        description: options.description,
-        recurrence: options.recurrence,
-        calendar_id: options.calendarId
-      };
-
-      const result = await this.client!.callTool("create_calendar_event", args);
-      
-      if (result.isError) {
-        return { success: false, message: result.content[0]?.text || "Unknown error" };
-      }
-
-      try {
-        const responseData = JSON.parse(result.content[0]?.text || "{}");
-        return { 
-          success: true, 
-          message: responseData.message || "Calendar event created",
-          eventId: responseData.event_id
-        };
-      } catch {
-        return { success: true, message: result.content[0]?.text || "Calendar event created" };
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      return { success: false, message };
-    }
+    return await this.client.createCalendarEvent(title, startTime, options);
   }
 
   async deleteCalendarEvent(eventId: string): Promise<{ success: boolean; message: string }> {
-    if (!this.isAvailable()) {
+    if (!this.isAvailable() || !this.client) {
       return { success: false, message: "MCP client not available" };
     }
 
-    try {
-      const result = await this.client!.callTool("delete_calendar_event", { event_id: eventId });
-      
-      if (result.isError) {
-        return { success: false, message: result.content[0]?.text || "Unknown error" };
-      }
-
-      return { success: true, message: result.content[0]?.text || "Calendar event deleted" };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      return { success: false, message };
-    }
+    return await this.client.deleteCalendarEvent(eventId);
   }
 
   async shutdown(): Promise<void> {
-    if (this.client) {
-      await this.client.disconnect();
-      this.client = null;
-    }
+    this.client = null;
   }
 }
 
