@@ -180,9 +180,21 @@ export async function executeRestrictedSQL<T = unknown>(
   tenantId?: string,
 ): Promise<SqlOutcome<T[]>> {
   return handleLLMDbOperation("execute_restricted_sql", async (connection) => {
-    // Set tenant context if provided
+    // Set tenant context if provided - crucial for RLS policies
     if (tenantId) {
+      console.log("Setting tenant context:", tenantId);
       await connection.queryObject(`SET LOCAL request.header.x-tenant-id = '${tenantId}';`);
+      
+      // Verify the setting worked
+      const verifyResult = await connection.queryObject(`SELECT current_setting('request.header.x-tenant-id', true) as tenant_id;`);
+      const currentTenant = (verifyResult.rows[0] as { tenant_id: string })?.tenant_id;
+      console.log("Verified tenant context:", currentTenant);
+      
+      if (currentTenant !== tenantId) {
+        console.error("Tenant context setting failed:", { expected: tenantId, actual: currentTenant });
+      }
+    } else {
+      console.warn("No tenant ID provided for restricted SQL operation");
     }
     
     const result = await connection.queryObject({ text, args });
@@ -295,28 +307,54 @@ export async function loadRecentMessages(
 ) {
   try {
     if (!chatId || !tenantId) {
+      console.warn("Missing chatId or tenantId in loadRecentMessages");
       return { result: [], error: null };
     }
 
-    // First verify user has access to this chat with tenant isolation
-    const { data: membershipData, error: membershipError } = await supabaseClient
-      .from("chat_users")
-      .select("chat_id")
-      .eq("chat_id", chatId.toString())
-      .eq("user_id", userId)
-      .eq("tenant_id", tenantId)
-      .maybeSingle();
+    console.log("Loading recent messages for:", { chatId: chatId.toString(), userId, tenantId });
 
-    if (membershipError || !membershipData) {
-      console.error("Authorization check failed:", { 
+    // First verify user has access to this chat with tenant isolation - with retry logic
+    let membershipData;
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    while (retryCount < maxRetries) {
+      const { data, error: membershipError } = await supabaseClient
+        .from("chat_users")
+        .select("chat_id")
+        .eq("chat_id", chatId.toString())
+        .eq("user_id", userId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+
+      if (!membershipError && data) {
+        membershipData = data;
+        break;
+      }
+      
+      if (retryCount < maxRetries - 1) {
+        console.warn(`Membership check attempt ${retryCount + 1} failed, retrying:`, { 
+          chatId: chatId.toString(), 
+          userId, 
+          tenantId, 
+          error: membershipError?.message 
+        });
+        await new Promise(resolve => setTimeout(resolve, 50)); // 50ms delay
+      }
+      retryCount++;
+    }
+
+    if (!membershipData) {
+      console.error("Authorization check failed after retries:", { 
         chatId: chatId?.toString(), 
         userId, 
         tenantId, 
-        membershipError: membershipError?.message,
-        membershipData 
+        retries: retryCount
       });
       return { result: [], error: "User not authorized for this chat" };
     }
+    
+    console.log("Membership verified for recent messages load");
 
     const query = supabaseClient
       .from("messages")

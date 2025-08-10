@@ -315,18 +315,48 @@ async function handleIncomingWebhook(body: unknown, callbackUrl: string, headers
       throw chatUserErr;
     }
 
-    // Verify membership exists before proceeding
-    const { data: membershipRow, error: membershipReadErr } = await supabaseAdmin
-      .from("chat_users")
-      .select("chat_id")
-      .eq("chat_id", chatIdText)
-      .eq("user_id", profileId)
-      .eq("tenant_id", tenantId)
-      .maybeSingle();
-    if (membershipReadErr || !membershipRow) {
-      console.error("Post-upsert membership missing:", { chatId: chatIdText, profileId, tenantId, membershipReadErr });
+    // Verify membership exists before proceeding - with retry logic for race conditions
+    let membershipRow;
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    while (retryCount < maxRetries) {
+      const { data, error: membershipReadErr } = await supabaseAdmin
+        .from("chat_users")
+        .select("chat_id")
+        .eq("chat_id", chatIdText)
+        .eq("user_id", profileId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      
+      if (!membershipReadErr && data) {
+        membershipRow = data;
+        break;
+      }
+      
+      if (retryCount < maxRetries - 1) {
+        console.warn(`Membership check attempt ${retryCount + 1} failed, retrying:`, { 
+          chatId: chatIdText, 
+          profileId, 
+          tenantId, 
+          error: membershipReadErr?.message 
+        });
+        await new Promise(resolve => setTimeout(resolve, 100)); // 100ms delay
+      }
+      retryCount++;
+    }
+    
+    if (!membershipRow) {
+      console.error("Post-upsert membership still missing after retries:", { 
+        chatId: chatIdText, 
+        profileId, 
+        tenantId, 
+        retries: retryCount 
+      });
       return new Response("Chat setup error", { status: 500 });
     }
+    
+    console.log("Membership verified:", { chatId: chatIdText, profileId, tenantId });
   } catch (chatErr) {
     console.error("Error ensuring chat records:", chatErr);
     return new Response("Chat setup error", { status: 500 });

@@ -116,6 +116,14 @@ Deno.serve(async (req) => {
       messageRole: incomingMessageRole 
     });
 
+    // Test environment variables
+    console.log("Environment check:", {
+      hasSupabaseUrl: !!supabaseUrl,
+      hasServiceKey: !!supabaseServiceRoleKey,
+      hasAnonKey: !!supabaseAnonKey,
+      hasOpenAIKey: !!openaiApiKey
+    });
+
     // Create tenant-aware Supabase client, propagating the caller Authorization if present
     const authHeader = req.headers.get("Authorization") || req.headers.get("authorization") || undefined;
     const bearerPrefix = "Bearer ";
@@ -123,7 +131,9 @@ Deno.serve(async (req) => {
       ? authHeader.slice(bearerPrefix.length)
       : undefined;
     
+    console.log("Creating Supabase client...");
     const supabase = createTenantSupabaseClient(tenantId, accessToken);
+    console.log("Supabase client created successfully");
 
     // Load recent and relevant messages with tenant context
     const chatId = typeof id === 'string' ? id : id.toString();
@@ -218,52 +228,37 @@ Deno.serve(async (req) => {
       console.error("Tool schema validation error:", toolError);
     }
 
-    // Generate AI response WITHOUT tools first to test basic OpenAI integration
-    console.log("Calling OpenAI without tools...");
-    let finalResponse: string;
-    try {
-      const result = await generateText({
-        model: openai.chat(openaiModel),
-        system: systemPrompt,
-        messages,
-        maxOutputTokens: 2000,
-      });
-      finalResponse = result.text;
-      console.log("OpenAI call successful");
-    } catch (openaiError) {
-      console.error("OpenAI call failed:", openaiError);
-      finalResponse = `Sorry, I encountered an error processing your request. Error: ${openaiError.message}`;
-    }
+    // Generate AI response with tools
+    const result = await generateText({
+      model: openai.chat(openaiModel),
+      system: systemPrompt,
+      messages,
+      tools,
+      maxOutputTokens: 2000,
+    });
 
-    // Store the user message and AI response with tenant context (with error handling)
-    try {
-      console.log("Storing user message...");
-      const userEmbedding = await generateEmbedding(userPrompt as string);
-      await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<unknown>)(supabase, {
-        user_id: userId as string,
-        role: incomingMessageRole as string,
-        content: userPrompt as string,
-        chat_id: chatId,
-        tenant_id: tenantId as string,
-        embedding: userEmbedding
-      });
-      
-      console.log("Storing assistant message...");
-      const assistantEmbedding = await generateEmbedding(finalResponse);
-      await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<unknown>)(supabase, {
-        user_id: userId as string,
-        role: "assistant",
-        content: finalResponse,
-        chat_id: chatId,
-        tenant_id: tenantId as string,
-        embedding: assistantEmbedding
-      });
-      
-      console.log("Message storage complete");
-    } catch (storageError) {
-      console.error("Message storage failed:", storageError);
-      // Continue execution even if storage fails
-    }
+    const finalResponse = result.text;
+
+    // Store the user message and AI response with tenant context
+    const userEmbedding = await generateEmbedding(userPrompt as string);
+    await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<unknown>)(supabase, {
+      user_id: userId as string,
+      role: incomingMessageRole as string,
+      content: userPrompt as string,
+      chat_id: chatId,
+      tenant_id: tenantId as string,
+      embedding: userEmbedding
+    });
+
+    const assistantEmbedding = await generateEmbedding(finalResponse);
+    await (insertMessage as unknown as (client: SupabaseClient, data: MessageData) => Promise<unknown>)(supabase, {
+      user_id: userId as string,
+      role: "assistant",
+      content: finalResponse,
+      chat_id: chatId,
+      tenant_id: tenantId as string,
+      embedding: assistantEmbedding
+    });
 
     // Call telegram-outgoing to send the response
     if (callbackUrl) {

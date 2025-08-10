@@ -1,5 +1,4 @@
-import { tool, zodSchema } from "npm:ai";
-import { z } from "npm:zod@3.25.76";
+import { tool } from "npm:ai";
 import {
   executeRestrictedSQL,
   executePrivilegedSQL,
@@ -82,11 +81,16 @@ export function createTools(
     execute_sql: tool({
       description:
         `Executes SQL within your private memories schema. Create tables directly (e.g., CREATE TABLE my_notes). You have full control over this isolated database space with tenant isolation.`,
-      parameters: zodSchema(
-        z.object({
-          query: z.string().describe("SQL query (DML/DDL)."),
-        })
-      ),
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "SQL query (DML/DDL)."
+          }
+        },
+        required: ["query"]
+      },
       execute: async ({ query }: { query: string }) => {
         const result = await executeRestrictedSQL(query, [], tenantId);
         if (result.error) return { error: result.error };
@@ -107,12 +111,20 @@ export function createTools(
     get_distinct_column_values: tool({
       description:
         `Retrieves distinct values for a column within your private memories schema.`,
-      parameters: zodSchema(
-        z.object({
-          table_name: z.string().describe("Table name."),
-          column_name: z.string().describe("Column name."),
-        })
-      ),
+      parameters: {
+        type: "object",
+        properties: {
+          table_name: {
+            type: "string",
+            description: "Table name."
+          },
+          column_name: {
+            type: "string",
+            description: "Column name."
+          }
+        },
+        required: ["table_name", "column_name"]
+      },
       execute: async ({ table_name, column_name }: { table_name: string; column_name: string }) => {
         if (!isValidIdentifier(table_name) || !isValidIdentifier(column_name)) {
           return { error: "Invalid table or column name format." };
@@ -132,15 +144,38 @@ export function createTools(
 
     fees_create: tool({
       description: "Creates a recurring fee reminder with optional amount and note. Schedules monthly reminders and optionally sends email confirmation.",
-      parameters: zodSchema(
-        z.object({
-          fee_type: z.enum(["electricity", "management", "water", "other"]).describe("Type of fee"),
-          due_day: z.number().int().min(1).max(31).describe("Day of month when fee is due (1-31)"),
-          amount: z.number().positive().optional().describe("Optional fee amount"),
-          currency: z.string().length(3).optional().describe("Currency code (e.g. USD, EUR)"),
-          note: z.string().optional().describe("Optional note or description"),
-        })
-      ),
+      parameters: {
+        type: "object",
+        properties: {
+          fee_type: {
+            type: "string",
+            enum: ["electricity", "management", "water", "other"],
+            description: "Type of fee"
+          },
+          due_day: {
+            type: "integer",
+            minimum: 1,
+            maximum: 31,
+            description: "Day of month when fee is due (1-31)"
+          },
+          amount: {
+            type: "number",
+            minimum: 0,
+            description: "Optional fee amount"
+          },
+          currency: {
+            type: "string",
+            minLength: 3,
+            maxLength: 3,
+            description: "Currency code (e.g. USD, EUR)"
+          },
+          note: {
+            type: "string",
+            description: "Optional note or description"
+          }
+        },
+        required: ["fee_type", "due_day"]
+      },
       execute: async ({ fee_type, due_day, amount, currency = 'USD', note }: { fee_type: 'electricity'|'management'|'water'|'other'; due_day: number; amount?: number; currency?: string; note?: string }) => {
         try {
           // Insert fee record with tenant context
@@ -204,7 +239,11 @@ export function createTools(
 
     fees_list_active: tool({
       description: "Lists all active fee reminders for the current chat.",
-      parameters: zodSchema(z.object({})),
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      },
       execute: async () => {
         try {
           const result = await executeRestrictedSQL(
@@ -247,12 +286,23 @@ export function createTools(
 
     fees_cancel: tool({
       description: "Cancels an active fee reminder by fee type and due day.",
-      parameters: zodSchema(
-        z.object({
-          fee_type: z.enum(["electricity", "management", "water", "other"]).describe("Type of fee to cancel"),
-          due_day: z.number().int().min(1).max(31).describe("Due day to help identify the specific fee"),
-        })
-      ),
+      parameters: {
+        type: "object",
+        properties: {
+          fee_type: {
+            type: "string",
+            enum: ["electricity", "management", "water", "other"],
+            description: "Type of fee to cancel"
+          },
+          due_day: {
+            type: "integer",
+            minimum: 1,
+            maximum: 31,
+            description: "Due day to help identify the specific fee"
+          }
+        },
+        required: ["fee_type", "due_day"]
+      },
       execute: async ({ fee_type, due_day }: { fee_type: 'electricity'|'management'|'water'|'other'; due_day: number }) => {
         try {
           // Find the fee to cancel
@@ -313,13 +363,27 @@ export function createTools(
 
     docs_store: tool({
       description: "Stores a document (text or URL) for later parsing and retrieval.",
-      parameters: zodSchema(
-        z.object({
-          doc_type: z.enum(["contract", "invoice", "other"]).describe("Type of document"),
-          source_kind: z.enum(["text", "url"]).describe("Whether this is raw text or a URL"),
-          source_value: z.string().min(1).describe("The actual text content or URL"),
-        })
-      ),
+      parameters: {
+        type: "object",
+        properties: {
+          doc_type: {
+            type: "string",
+            enum: ["contract", "invoice", "other"],
+            description: "Type of document"
+          },
+          source_kind: {
+            type: "string",
+            enum: ["text", "url"],
+            description: "Whether this is raw text or a URL"
+          },
+          source_value: {
+            type: "string",
+            minLength: 1,
+            description: "The actual text content or URL"
+          }
+        },
+        required: ["doc_type", "source_kind", "source_value"]
+      },
       execute: async ({ doc_type, source_kind, source_value }: { doc_type: 'contract'|'invoice'|'other'; source_kind: 'text'|'url'; source_value: string }) => {
         try {
           const result = await executeRestrictedSQL(
@@ -349,11 +413,17 @@ export function createTools(
 
     docs_parse: tool({
       description: "Parses a stored document using AI to extract structured information.",
-      parameters: zodSchema(
-        z.object({
-          document_id: z.string().uuid().describe("ID of the document to parse"),
-        })
-      ),
+      parameters: {
+        type: "object",
+        properties: {
+          document_id: {
+            type: "string",
+            pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            description: "ID of the document to parse"
+          }
+        },
+        required: ["document_id"]
+      },
       execute: async ({ document_id }: { document_id: string }) => {
         try {
           // Get the document
@@ -410,12 +480,22 @@ export function createTools(
 
     docs_email_summary: tool({
       description: "Emails a summary of a parsed document (placeholder for MCP integration).",
-      parameters: zodSchema(
-        z.object({
-          document_id: z.string().uuid().describe("ID of the document to summarize"),
-          to: z.string().email().optional().describe("Email address (optional, uses chat settings if not provided)"),
-        })
-      ),
+      parameters: {
+        type: "object",
+        properties: {
+          document_id: {
+            type: "string",
+            pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            description: "ID of the document to summarize"
+          },
+          to: {
+            type: "string",
+            format: "email",
+            description: "Email address (optional, uses chat settings if not provided)"
+          }
+        },
+        required: ["document_id"]
+      },
       execute: async ({ document_id, to }: { document_id: string; to?: string }) => {
         try {
           // Get document and its parsed data
@@ -455,14 +535,31 @@ export function createTools(
 
     notifications_set_email_prefs: tool({
       description: "Sets email notification preferences for the current chat.",
-      parameters: zodSchema(
-        z.object({
-          email: z.string().email().describe("Email address for notifications"),
-          email_enabled: z.boolean().optional().describe("Whether to enable email notifications"),
-          calendar_provider: z.enum(["google", "outlook"]).optional().describe("Preferred calendar provider"),
-          default_reminder_minutes: z.number().int().min(1).optional().describe("Default reminder time before due date in minutes"),
-        })
-      ),
+      parameters: {
+        type: "object",
+        properties: {
+          email: {
+            type: "string",
+            format: "email",
+            description: "Email address for notifications"
+          },
+          email_enabled: {
+            type: "boolean",
+            description: "Whether to enable email notifications"
+          },
+          calendar_provider: {
+            type: "string",
+            enum: ["google", "outlook"],
+            description: "Preferred calendar provider"
+          },
+          default_reminder_minutes: {
+            type: "integer",
+            minimum: 1,
+            description: "Default reminder time before due date in minutes"
+          }
+        },
+        required: ["email"]
+      },
       execute: async ({ email, email_enabled, calendar_provider, default_reminder_minutes }: { email: string; email_enabled?: boolean; calendar_provider?: 'google'|'outlook'; default_reminder_minutes?: number }) => {
         try {
           const result = await executeRestrictedSQL(
@@ -496,14 +593,29 @@ export function createTools(
 
     notifications_send_email: tool({
       description: "Sends an email notification (placeholder for MCP integration).",
-      parameters: zodSchema(
-        z.object({
-          to: z.string().email().optional().describe("Recipient email (uses chat settings if not provided)"),
-          subject: z.string().describe("Email subject"),
-          html: z.string().optional().describe("HTML email body"),
-          text: z.string().optional().describe("Plain text email body"),
-        })
-      ),
+      parameters: {
+        type: "object",
+        properties: {
+          to: {
+            type: "string",
+            format: "email",
+            description: "Recipient email (uses chat settings if not provided)"
+          },
+          subject: {
+            type: "string",
+            description: "Email subject"
+          },
+          html: {
+            type: "string",
+            description: "HTML email body"
+          },
+          text: {
+            type: "string",
+            description: "Plain text email body"
+          }
+        },
+        required: ["subject"]
+      },
       execute: async ({ to, subject, html: _html, text: _text }: { to?: string; subject: string; html?: string; text?: string }) => {
         try {
           // Get email address if not provided
@@ -534,12 +646,21 @@ export function createTools(
 
     calendar_create_event_for_fee: tool({
       description: "Creates a calendar event for a fee reminder (placeholder for MCP integration).",
-      parameters: zodSchema(
-        z.object({
-          fee_id: z.string().uuid().describe("ID of the fee to create calendar event for"),
-          title: z.string().optional().describe("Custom event title"),
-        })
-      ),
+      parameters: {
+        type: "object",
+        properties: {
+          fee_id: {
+            type: "string",
+            pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            description: "ID of the fee to create calendar event for"
+          },
+          title: {
+            type: "string",
+            description: "Custom event title"
+          }
+        },
+        required: ["fee_id"]
+      },
       execute: async ({ fee_id, title }: { fee_id: string; title?: string }) => {
         try {
           // Get fee details
@@ -583,11 +704,17 @@ export function createTools(
 
     calendar_cancel_event_for_fee: tool({
       description: "Cancels the calendar event for a fee reminder.",
-      parameters: zodSchema(
-        z.object({
-          fee_id: z.string().uuid().describe("ID of the fee whose calendar event should be cancelled"),
-        })
-      ),
+      parameters: {
+        type: "object",
+        properties: {
+          fee_id: {
+            type: "string",
+            pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            description: "ID of the fee whose calendar event should be cancelled"
+          }
+        },
+        required: ["fee_id"]
+      },
       execute: async ({ fee_id }: { fee_id: string }) => {
         try {
           // Find the calendar event mapping
