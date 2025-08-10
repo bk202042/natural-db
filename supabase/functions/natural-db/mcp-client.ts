@@ -57,8 +57,13 @@ class ZapierMCPClient implements MCPClient {
 
   async connect(): Promise<void> {
     try {
+      console.log("ZapierMCPClient: Starting connection to:", this.baseUrl);
+      
       // Initialize MCP connection
-      const response = await fetch(`${this.baseUrl}/initialize`, {
+      const initUrl = `${this.baseUrl}/initialize`;
+      console.log("ZapierMCPClient: Sending initialize request to:", initUrl);
+      
+      const response = await fetch(initUrl, {
         method: 'POST',
         headers: {
           'Authorization': this.authToken,
@@ -72,13 +77,31 @@ class ZapierMCPClient implements MCPClient {
         })
       });
 
+      console.log("ZapierMCPClient: Initialize response status:", response.status);
+      
       if (!response.ok) {
-        throw new Error(`MCP initialization failed: ${response.status}`);
+        const responseText = await response.text().catch(() => "Unable to read response");
+        console.error("ZapierMCPClient: Initialize failed:", {
+          status: response.status,
+          statusText: response.statusText,
+          responseText: responseText
+        });
+        throw new Error(`MCP initialization failed: ${response.status} ${response.statusText}`);
       }
 
+      const initResult = await response.json().catch(() => ({}));
+      console.log("ZapierMCPClient: Initialize successful:", initResult);
+
       this.connected = true;
+      console.log("ZapierMCPClient: Connection established, discovering tools...");
       await this.discoverTools();
+      console.log("ZapierMCPClient: Connection and tool discovery complete");
     } catch (error) {
+      console.error("ZapierMCPClient: Connection failed:", {
+        error: error instanceof Error ? error.message : "Unknown error",
+        errorStack: error instanceof Error ? error.stack : undefined,
+        baseUrl: this.baseUrl
+      });
       this.connected = false;
       throw error;
     }
@@ -86,7 +109,10 @@ class ZapierMCPClient implements MCPClient {
 
   private async discoverTools(): Promise<void> {
     try {
-      const response = await fetch(`${this.baseUrl}/tools/list`, {
+      console.log("ZapierMCPClient: Starting tool discovery...");
+      const toolsUrl = `${this.baseUrl}/tools/list`;
+      
+      const response = await fetch(toolsUrl, {
         method: 'POST',
         headers: {
           'Authorization': this.authToken,
@@ -94,13 +120,29 @@ class ZapierMCPClient implements MCPClient {
         }
       });
 
+      console.log("ZapierMCPClient: Tool discovery response status:", response.status);
+
       if (!response.ok) {
+        const responseText = await response.text().catch(() => "Unable to read response");
+        console.error("ZapierMCPClient: Tool discovery failed:", {
+          status: response.status,
+          statusText: response.statusText,
+          responseText: responseText
+        });
         throw new Error(`Tool discovery failed: ${response.status}`);
       }
 
       const data = await response.json();
       this.availableTools = data.tools || [];
+      console.log("ZapierMCPClient: Discovered tools:", {
+        count: this.availableTools.length,
+        toolNames: this.availableTools.map(t => t.name)
+      });
     } catch (error) {
+      console.warn("ZapierMCPClient: Tool discovery failed, using fallback tools:", {
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+      
       // Fallback to common Zapier tools
       this.availableTools = [
         {
@@ -219,15 +261,35 @@ export class MCPClientManager {
     const zapierMcpUrl = Deno.env.get("ZAPIER_MCP_URL") || "https://mcp.zapier.com/api/mcp/mcp";
     const zapierAuthToken = Deno.env.get("ZAPIER_MCP_AUTH_TOKEN") || "Bearer MTY3MWQxM2UtMWZlOS00ZWI5LTkxYWUtMjYwZWZiNWFjZWViOjEzZmFiY2EzLWYzM2UtNDJjZC1iMDRhLTliN2ZhNGEwOTA1Yw==";
 
+    console.log("MCP Client initialization starting...");
+    console.log("Environment variables:", {
+      hasZapierMcpUrl: !!Deno.env.get("ZAPIER_MCP_URL"),
+      hasZapierMcpAuthToken: !!Deno.env.get("ZAPIER_MCP_AUTH_TOKEN"),
+      zapierMcpUrlLength: zapierMcpUrl.length,
+      zapierAuthTokenLength: zapierAuthToken.length,
+      zapierMcpUrl: zapierMcpUrl.substring(0, 50) + "...",
+      zapierAuthTokenStart: zapierAuthToken.substring(0, 20) + "..."
+    });
+
     if (!zapierMcpUrl) {
+      console.log("MCP initialization failed: No Zapier MCP URL provided");
       return false;
     }
 
     try {
+      console.log("Creating Zapier MCP client...");
       this.client = new ZapierMCPClient(zapierMcpUrl, zapierAuthToken);
+      
+      console.log("Attempting MCP client connection...");
       await this.client.connect();
+      
+      console.log("MCP client connection successful");
       return true;
     } catch (error) {
+      console.error("MCP client initialization failed:", {
+        error: error instanceof Error ? error.message : "Unknown error",
+        errorStack: error instanceof Error ? error.stack : undefined
+      });
       this.client = null;
       return false;
     }

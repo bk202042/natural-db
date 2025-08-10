@@ -167,10 +167,32 @@ Deno.serve(async (req) => {
     // Initialize MCP client if available (MUST be before system prompt)
     let mcpClient: MCPClientManager | undefined;
     try {
+      // Check environment variables first
+      const zapierMcpUrl = Deno.env.get("ZAPIER_MCP_URL");
+      const zapierAuthToken = Deno.env.get("ZAPIER_MCP_AUTH_TOKEN");
+      
+      console.log("MCP Environment check:", {
+        hasUrl: !!zapierMcpUrl,
+        hasToken: !!zapierAuthToken,
+        urlLength: zapierMcpUrl?.length || 0,
+        tokenLength: zapierAuthToken?.length || 0
+      });
+
       mcpClient = MCPClientManager.getInstance();
+      console.log("MCP Client created, checking availability...");
+      
       if (!mcpClient.isAvailable()) {
-        await mcpClient.initialize();
+        console.log("MCP not available, attempting initialization...");
+        const initResult = await mcpClient.initialize();
+        console.log("MCP initialization result:", initResult);
+      } else {
+        console.log("MCP client already available");
       }
+      
+      console.log("Final MCP status:", {
+        available: mcpClient.isAvailable(),
+        clientExists: !!mcpClient
+      });
     } catch (error) {
       console.error("MCP initialization failed:", error);
       mcpClient = undefined;
