@@ -2,26 +2,18 @@
 // This module provides MCP integration using the new experimental MCP client
 // to integrate with Zapier's email and calendar services
 
-import { z } from "npm:zod@3.25.76";
 import { createOpenAI } from "npm:@ai-sdk/openai";
-import { generateText, experimental_createMCPClient } from "npm:ai";
+import { generateText } from "npm:ai";
 
-// Schemas for validation
-const EmailToolSchema = z.object({
-  to: z.string().email(),
-  subject: z.string().min(1),
-  body: z.string().optional(),
-  html: z.string().optional()
-});
-
-const CalendarEventSchema = z.object({
-  title: z.string().min(1),
-  start_time: z.string(),
-  end_time: z.string().optional(),
-  description: z.string().optional(),
-  recurrence: z.string().optional(),
-  calendar_id: z.string().optional()
-});
+// Define our own tool interface based on AI SDK patterns
+interface MCPTool {
+  description: string;
+  parameters: {
+    type: "object";
+    properties: Record<string, { type: string }>;
+  };
+  execute?: (params: Record<string, unknown>) => Promise<string>;
+}
 
 // MCP Tool Result Interface
 interface MCPToolResult {
@@ -35,8 +27,8 @@ class ZapierMCPClient {
   private readonly openai: ReturnType<typeof createOpenAI>;
   private readonly zapierMcpUrl: string;
   private readonly zapierAuthToken: string;
-  private mcpClient: any = null;
-  private tools: any = {};
+  private mcpClient: { tools: () => Promise<Record<string, MCPTool>>; close: () => Promise<void> } | null = null;
+  private tools: Record<string, MCPTool> = {};
   private available = false;
 
   constructor(openai: ReturnType<typeof createOpenAI>, zapierMcpUrl: string, zapierAuthToken: string) {
@@ -104,7 +96,7 @@ class ZapierMCPClient {
       
       // For now, create a mock client to test the flow
       this.mcpClient = {
-        tools: async () => ({
+        tools: (): Promise<Record<string, MCPTool>> => Promise.resolve({
           send_email: {
             description: "Send an email via Zapier",
             parameters: {
@@ -114,7 +106,8 @@ class ZapierMCPClient {
                 subject: { type: "string" },
                 body: { type: "string" }
               }
-            }
+            },
+            execute: (params) => Promise.resolve(`Mock email sent to ${(params as { to: string; subject: string }).to} with subject: ${(params as { to: string; subject: string }).subject}`)
           },
           create_calendar_event: {
             description: "Create a calendar event via Zapier", 
@@ -125,10 +118,11 @@ class ZapierMCPClient {
                 start_time: { type: "string" },
                 end_time: { type: "string" }
               }
-            }
+            },
+            execute: (params) => Promise.resolve(`Mock calendar event created: ${(params as { title: string; start_time: string }).title} at ${(params as { title: string; start_time: string }).start_time}`)
           }
         }),
-        close: async () => {}
+        close: () => Promise.resolve()
       };
 
       console.log("MCP client created successfully");
@@ -311,7 +305,7 @@ export class MCPClientManager {
       }
       
       return success;
-    } catch (error) {
+    } catch (_error) {
       this.client = null;
       return false;
     }
