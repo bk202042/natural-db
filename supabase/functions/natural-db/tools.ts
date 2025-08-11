@@ -203,7 +203,7 @@ export function createTools(
         },
         required: ["fee_type", "due_day"]
       },
-      execute: async ({ fee_type, due_day, amount, currency = 'USD', note }: { fee_type: 'electricity'|'management'|'water'|'other'; due_day: number; amount?: number; currency?: string; note?: string }) => {
+      execute: async ({ fee_type, due_day, amount, currency = 'USD', note }: { fee_type: 'electricity'|'management'|'water'|'rent'|'gas'|'internet'|'maintenance'|'insurance'|'parking'|'other'; due_day: number; amount?: number; currency?: string; note?: string }) => {
         try {
           // Insert fee record with tenant context
           const insertFeeResult = await executeRestrictedSQL(
@@ -382,7 +382,7 @@ export function createTools(
         },
         required: ["fee_type", "due_day"]
       },
-      execute: async ({ fee_type, due_day }: { fee_type: 'electricity'|'management'|'water'|'other'; due_day: number }) => {
+      execute: async ({ fee_type, due_day }: { fee_type: 'electricity'|'management'|'water'|'rent'|'gas'|'internet'|'maintenance'|'insurance'|'parking'|'other'; due_day: number }) => {
         try {
           // Find the fee to cancel
           const feeResult = await executeRestrictedSQL(
@@ -463,7 +463,7 @@ export function createTools(
         },
         required: ["doc_type", "source_kind", "source_value"]
       },
-      execute: async ({ doc_type, source_kind, source_value }: { doc_type: 'contract'|'invoice'|'other'; source_kind: 'text'|'url'; source_value: string }) => {
+      execute: async ({ doc_type, source_kind, source_value }: { doc_type: 'lease_agreement'|'rental_contract'|'utility_invoice'|'maintenance_invoice'|'insurance_document'|'inspection_report'|'other'; source_kind: 'text'|'url'; source_value: string }) => {
         try {
           const result = await executeRestrictedSQL(
             `INSERT INTO documents (tenant_id, chat_id, doc_type, source_kind, source_value)

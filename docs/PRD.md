@@ -130,11 +130,11 @@ sequenceDiagram
 
 ## Data Model Changes (memories schema)
 - `memories.fees`
-  - id UUID PK; chat_id TEXT; fee_type TEXT CHECK IN ('electricity','management','water','other'); amount NUMERIC NULL; currency TEXT NULL; due_day SMALLINT CHECK 1–31; note TEXT NULL; is_active BOOLEAN DEFAULT true; created_at/updated_at.
+  - id UUID PK; chat_id TEXT; fee_type TEXT CHECK IN ('electricity','management','water','rent','gas','internet','maintenance','insurance','parking','other'); amount NUMERIC NULL; currency TEXT NULL; due_day SMALLINT CHECK 1–31; note TEXT NULL; is_active BOOLEAN DEFAULT true; created_at/updated_at.
 - `memories.fee_jobs`
   - id UUID PK; fee_id UUID FK; cron_job_name TEXT UNIQUE; cron_expression TEXT; timezone TEXT NULL; created_at.
 - `memories.documents`
-  - id UUID PK; chat_id TEXT; doc_type TEXT CHECK IN ('contract','invoice','other'); source_kind TEXT CHECK IN ('text','url'); source_value TEXT; parsed JSONB NULL; created_at.
+  - id UUID PK; chat_id TEXT; doc_type TEXT CHECK IN ('lease_agreement','rental_contract','utility_invoice','maintenance_invoice','insurance_document','inspection_report','other'); source_kind TEXT CHECK IN ('text','url'); source_value TEXT; parsed JSONB NULL; created_at.
 - `memories.notification_settings`
   - chat_id TEXT PK; email TEXT NOT NULL; email_enabled BOOLEAN DEFAULT true; calendar_provider TEXT DEFAULT 'google'; default_reminder_minutes INT DEFAULT 60; created_at/updated_at.
 - `memories.fee_calendar_events`

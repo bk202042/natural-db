@@ -13,13 +13,13 @@
 Create a new migration file under `supabase/migrations/` (e.g., `20250808_add_realestate_mvp.sql`).
 
 - memories.fees
-  - id UUID PK; tenant_id UUID; chat_id TEXT; fee_type TEXT CHECK IN ('electricity','management','water','other'); amount NUMERIC NULL; currency TEXT NULL; due_day SMALLINT CHECK 1–31; note TEXT NULL; is_active BOOLEAN DEFAULT true; created_at/updated_at.
+  - id UUID PK; tenant_id UUID; chat_id TEXT; fee_type TEXT CHECK IN ('electricity','management','water','rent','gas','internet','maintenance','insurance','parking','other'); amount NUMERIC NULL; currency TEXT NULL; due_day SMALLINT CHECK 1–31; note TEXT NULL; is_active BOOLEAN DEFAULT true; created_at/updated_at.
   - Indexes: (tenant_id), (tenant_id, chat_id), (is_active, tenant_id, chat_id).
 - memories.fee_jobs
   - id UUID PK; tenant_id UUID; fee_id UUID FK→memories.fees(id); cron_job_name TEXT UNIQUE NOT NULL; cron_expression TEXT NOT NULL; timezone TEXT NULL; created_at.
   - Indexes: (tenant_id), (tenant_id, fee_id), (cron_job_name).
 - memories.documents
-  - id UUID PK; tenant_id UUID; chat_id TEXT; doc_type TEXT CHECK IN ('contract','invoice','other'); source_kind TEXT CHECK IN ('text','url'); source_value TEXT; parsed JSONB NULL; created_at.
+  - id UUID PK; tenant_id UUID; chat_id TEXT; doc_type TEXT CHECK IN ('lease_agreement','rental_contract','utility_invoice','maintenance_invoice','insurance_document','inspection_report','other'); source_kind TEXT CHECK IN ('text','url'); source_value TEXT; parsed JSONB NULL; created_at.
   - Indexes: (tenant_id), (tenant_id, chat_id), (doc_type, tenant_id, chat_id).
 - memories.notification_settings
   - tenant_id UUID; chat_id TEXT PK; email TEXT NOT NULL; email_enabled BOOLEAN DEFAULT true; calendar_provider TEXT DEFAULT 'google'; default_reminder_minutes INT DEFAULT 60; created_at/updated_at.
