@@ -498,7 +498,43 @@
       "lastAccessed": "2025-08-09T10:20:13.081Z",
       "lastVerified": "2025-08-09T10:20:13.081Z",
       "status": "fresh"
+    },
+    {
+      "id": "mem_1754886526246_geknfr5ny",
+      "content": "User wants to refactor their real estate customer service bot that was built from the Natural-DB template. The original template is a generic personal AI assistant with broad capabilities including run tracking, meal planning, feedback analysis, article bookmarking, web search, Zapier integrations, scheduled prompts, and general conversation. The user wants to focus this down to just basic functionality that would be specifically helpful for real estate agency customers.",
+      "type": "general",
+      "tags": [
+        "general",
+        "refactor",
+        "real-estate",
+        "natural-db",
+        "focus"
+      ],
+      "timestamp": "2025-08-11T04:28:46.246Z",
+      "context": "Refactoring request - template analysis",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-11T04:28:46.246Z",
+      "lastVerified": "2025-08-11T04:28:46.246Z",
+      "status": "fresh"
+    },
+    {
+      "id": "mem_1754886552903_2axcwcpui",
+      "content": "Analysis of current state vs Natural-DB template:\n\nCURRENT STATE: The codebase has been heavily customized for real estate customer service with specific features:\n- Fee reminder management (electricity, management, water, other fee types)\n- Document storage and parsing (contracts, invoices)\n- Email notifications via Zapier MCP\n- Calendar integration for recurring fee reminders  \n- Tenant isolation with multi-tenancy support\n\nORIGINAL TEMPLATE FEATURES (from blog):\n- General personal assistant capabilities\n- Run tracking, meal planning, feedback analysis\n- Article bookmarking, general web search\n- Broad conversational abilities\n- Open-ended memory and learning\n\nKEY ISSUE: The current implementation is already focused on real estate domain but may still have some generic capabilities that dilute the focus for real estate customers.",
+      "type": "troubleshooting",
+      "tags": [
+        "troubleshooting",
+        "analysis",
+        "real-estate",
+        "focus",
+        "template-comparison"
+      ],
+      "timestamp": "2025-08-11T04:29:12.903Z",
+      "context": "Current vs template analysis",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-11T04:29:12.903Z",
+      "lastVerified": "2025-08-11T04:29:12.903Z",
+      "status": "fresh"
     }
   ],
-  "lastUpdated": "2025-08-09T10:20:13.081Z"
+  "lastUpdated": "2025-08-11T04:29:12.903Z"
 }

@@ -80,57 +80,82 @@ export function createTools(
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 
   return {
-    execute_sql: tool({
+    execute_real_estate_query: tool({
       description:
-        `Executes SQL within your private memories schema. Create tables directly (e.g., CREATE TABLE my_notes). You have full control over this isolated database space with tenant isolation.`,
+        `Executes read-only SQL queries on real estate data (fees, documents, notifications). Only SELECT queries allowed on existing real estate tables: fees, fee_jobs, documents, notification_settings, fee_calendar_events.`,
       parameters: {
         type: "object",
         properties: {
           query: {
             type: "string",
-            description: "SQL query (DML/DDL)."
+            description: "SELECT query on real estate tables only (fees, documents, etc.)"
           }
         },
         required: ["query"]
       },
       execute: async ({ query }: { query: string }) => {
+        const trimmed = query.trim().toUpperCase();
+        
+        // Only allow SELECT queries
+        if (!trimmed.startsWith("SELECT")) {
+          return { error: "Only SELECT queries are allowed. Use specific tools for creating/updating data." };
+        }
+        
+        // Validate that query only references real estate tables
+        const allowedTables = ['fees', 'fee_jobs', 'documents', 'notification_settings', 'fee_calendar_events'];
+        const hasValidTable = allowedTables.some(table => 
+          trimmed.includes(`FROM ${table.toUpperCase()}`) || 
+          trimmed.includes(`JOIN ${table.toUpperCase()}`)
+        );
+        
+        if (!hasValidTable) {
+          return { error: `Query must reference real estate tables only: ${allowedTables.join(', ')}` };
+        }
+        
+        // Block potentially dangerous operations even in SELECT
+        const blockedKeywords = ['EXEC', 'EXECUTE', 'CALL', 'PROCEDURE', 'FUNCTION'];
+        if (blockedKeywords.some(keyword => trimmed.includes(keyword))) {
+          return { error: "Query contains blocked operations." };
+        }
+
         const result = await executeRestrictedSQL(query, [], tenantId);
         if (result.error) return { error: result.error };
 
-        const trimmed = query.trim();
         const rows = (result.result ?? []) as unknown[];
         const rowsConverted = convertBigIntsToStrings(rows);
-        if (trimmed.toUpperCase().startsWith("SELECT") || rowsConverted.length > 0) {
-          return JSON.stringify(rowsConverted);
-        }
-        return JSON.stringify({
-          message: "Command executed successfully.",
-          rowCount: Number((result.result ?? []).length || 0),
-        });
+        return JSON.stringify(rowsConverted);
       },
     }),
 
-    get_distinct_column_values: tool({
+    get_real_estate_distinct_values: tool({
       description:
-        `Retrieves distinct values for a column within your private memories schema.`,
+        `Retrieves distinct values for a column in real estate tables only (fees, documents, notifications, etc.).`,
       parameters: {
         type: "object",
         properties: {
           table_name: {
             type: "string",
-            description: "Table name."
+            enum: ["fees", "fee_jobs", "documents", "notification_settings", "fee_calendar_events"],
+            description: "Real estate table name"
           },
           column_name: {
             type: "string",
-            description: "Column name."
+            description: "Column name to get distinct values from"
           }
         },
         required: ["table_name", "column_name"]
       },
       execute: async ({ table_name, column_name }: { table_name: string; column_name: string }) => {
+        const allowedTables = ['fees', 'fee_jobs', 'documents', 'notification_settings', 'fee_calendar_events'];
+        
+        if (!allowedTables.includes(table_name)) {
+          return { error: `Table must be one of: ${allowedTables.join(', ')}` };
+        }
+        
         if (!isValidIdentifier(table_name) || !isValidIdentifier(column_name)) {
           return { error: "Invalid table or column name format." };
         }
+        
         const query = `SELECT DISTINCT "${column_name}" FROM ${table_name};`;
         const result = await executeRestrictedSQL(query, [], tenantId);
         if (result.error) return { error: result.error };
@@ -145,14 +170,14 @@ export function createTools(
     // ========================================================================
 
     fees_create: tool({
-      description: "Creates a recurring fee reminder with optional amount and note. Schedules monthly reminders and optionally sends email confirmation.",
+      description: "Creates a recurring property fee reminder (electricity, management, water, etc.) for tenants. Schedules monthly reminders and sends email/calendar notifications when enabled.",
       parameters: {
         type: "object",
         properties: {
           fee_type: {
             type: "string",
-            enum: ["electricity", "management", "water", "other"],
-            description: "Type of fee"
+            enum: ["electricity", "management", "water", "rent", "gas", "internet", "maintenance", "insurance", "parking", "other"],
+            description: "Type of property-related fee (utilities, rent, services)"
           },
           due_day: {
             type: "integer",
@@ -163,13 +188,13 @@ export function createTools(
           amount: {
             type: "number",
             minimum: 0,
-            description: "Optional fee amount"
+            maximum: 50000,
+            description: "Optional property fee amount (max 50,000 per month)"
           },
           currency: {
             type: "string",
-            minLength: 3,
-            maxLength: 3,
-            description: "Currency code (e.g. USD, EUR)"
+            enum: ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "SEK", "NOK", "DKK"],
+            description: "Currency code for property fees (USD, EUR, GBP, etc.)"
           },
           note: {
             type: "string",
@@ -292,7 +317,7 @@ export function createTools(
     }),
 
     fees_list_active: tool({
-      description: "Lists all active fee reminders for the current chat.",
+      description: "Lists all active property fee reminders (rent, utilities, management fees) for the current tenant/agent chat.",
       parameters: {
         type: "object",
         properties: {},
@@ -339,14 +364,14 @@ export function createTools(
     }),
 
     fees_cancel: tool({
-      description: "Cancels an active fee reminder by fee type and due day.",
+      description: "Cancels an active property fee reminder (electricity, management, water, other) by fee type and due day for the current tenant.",
       parameters: {
         type: "object",
         properties: {
           fee_type: {
             type: "string",
-            enum: ["electricity", "management", "water", "other"],
-            description: "Type of fee to cancel"
+            enum: ["electricity", "management", "water", "rent", "gas", "internet", "maintenance", "insurance", "parking", "other"],
+            description: "Type of property-related fee to cancel"
           },
           due_day: {
             type: "integer",
@@ -416,14 +441,14 @@ export function createTools(
     }),
 
     docs_store: tool({
-      description: "Stores a document (text or URL) for later parsing and retrieval.",
+      description: "Stores a property-related document (lease contract, utility invoice, etc.) as text or URL for tenant/agent reference.",
       parameters: {
         type: "object",
         properties: {
           doc_type: {
             type: "string",
-            enum: ["contract", "invoice", "other"],
-            description: "Type of document"
+            enum: ["lease_agreement", "rental_contract", "utility_invoice", "maintenance_invoice", "insurance_document", "inspection_report", "other"],
+            description: "Type of property document (lease, utility bills, maintenance records)"
           },
           source_kind: {
             type: "string",
@@ -466,7 +491,7 @@ export function createTools(
     }),
 
     docs_parse: tool({
-      description: "Parses a stored document using AI to extract structured information.",
+      description: "Parses a stored property document (contract, invoice) using AI to extract key rental/property information like amounts, dates, parties.",
       parameters: {
         type: "object",
         properties: {
@@ -533,7 +558,7 @@ export function createTools(
     }),
 
     docs_email_summary: tool({
-      description: "Emails a summary of a parsed document via Zapier MCP integration.",
+      description: "Emails a summary of a parsed property document (lease contract, utility invoice) to tenant/agent via Zapier integration.",
       parameters: {
         type: "object",
         properties: {
@@ -632,7 +657,7 @@ export function createTools(
     }),
 
     notifications_set_email_prefs: tool({
-      description: "Sets email notification preferences for the current chat.",
+      description: "Sets email notification preferences for property-related reminders (fee due dates, document summaries) for the current tenant/agent.",
       parameters: {
         type: "object",
         properties: {
@@ -690,7 +715,7 @@ export function createTools(
     }),
 
     notifications_send_email: tool({
-      description: "Sends an email notification via Zapier MCP integration.",
+      description: "Sends property-related email notifications (fee reminders, document summaries) to tenant/agent via Zapier integration.",
       parameters: {
         type: "object",
         properties: {
@@ -752,7 +777,7 @@ export function createTools(
     }),
 
     calendar_create_event_for_fee: tool({
-      description: "Creates a calendar event for a fee reminder via Zapier MCP integration.",
+      description: "Creates a recurring calendar event for property fee reminders (rent, utilities) via Zapier integration for tenant/agent scheduling.",
       parameters: {
         type: "object",
         properties: {
@@ -845,7 +870,7 @@ export function createTools(
     }),
 
     calendar_cancel_event_for_fee: tool({
-      description: "Cancels the calendar event for a fee reminder.",
+      description: "Cancels the recurring calendar event for a property fee reminder (utilities, rent) for the current tenant.",
       parameters: {
         type: "object",
         properties: {
