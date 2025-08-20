@@ -45,7 +45,7 @@ CREATE OR REPLACE FUNCTION public.current_tenant_id() RETURNS UUID
 LANGUAGE SQL STABLE AS $$
   SELECT coalesce(
     nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'tenant_id',
-    current_setting('request.header.x-tenant-id', true)
+    current_setting('request.header.tenant_id', true)
   )::uuid
 $$;
 
@@ -198,7 +198,7 @@ RETURNS TABLE (
 ) AS $$
 BEGIN
     -- Set tenant context
-    PERFORM set_config('request.header.x-tenant-id', test_tenant_id::text, true);
+    PERFORM set_config('request.header.tenant_id', test_tenant_id::text, true);
     
     RETURN QUERY
     SELECT 'profiles'::TEXT, COUNT(*), COUNT(*) > 0 FROM public.profiles

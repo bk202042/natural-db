@@ -183,10 +183,10 @@ export async function executeRestrictedSQL<T = unknown>(
     // Set tenant context if provided - crucial for RLS policies
     if (tenantId) {
       console.log("Setting tenant context:", tenantId);
-      await connection.queryObject(`SET LOCAL app.current_tenant_id = '${tenantId}';`);
+      await connection.queryObject(`SET LOCAL request.header.tenant_id = '${tenantId}';`);
       
       // Verify the setting worked
-      const verifyResult = await connection.queryObject(`SELECT current_setting('app.current_tenant_id', true) as tenant_id;`);
+      const verifyResult = await connection.queryObject(`SELECT current_setting('request.header.tenant_id', true) as tenant_id;`);
       const currentTenant = (verifyResult.rows[0] as { tenant_id: string })?.tenant_id;
       console.log("Verified tenant context:", currentTenant);
       
@@ -415,7 +415,7 @@ export async function insertMessage(
   try {
     // Set tenant context in the database session before inserting
     const { error: contextError } = await supabaseClient.rpc('set_config', {
-      setting_name: 'app.current_tenant_id',
+      setting_name: 'request.header.tenant_id',
       new_value: messageData.tenant_id,
       is_local: true
     });
