@@ -557,7 +557,28 @@
       "lastAccessed": "2025-08-20T02:21:52.737Z",
       "lastVerified": "2025-08-20T02:21:52.737Z",
       "status": "fresh"
+    },
+    {
+      "id": "mem_1755657155194_4mui341pp",
+      "content": "Successfully updated Natural-DB system prompts to reflect Zapier MCP integration capabilities.\n\nChanges made:\n1. Updated default system prompt in index.ts with enhanced email/calendar features\n2. Updated all 3 sample system prompts in sample_system_prompts.sql:\n   - Tenant-focused prompt: Added email notifications and calendar integration for personal expense management\n   - Property agent/manager prompt: Added comprehensive MCP automation for business workflows\n   - Mixed residential/commercial prompt: Added differentiated email templates and workflows by property type\n\nKey improvements:\n- Proactive email and calendar integration messaging\n- Clear distinction between mock mode (development) vs active Zapier MCP\n- Professional email templates and automated workflows\n- Calendar event creation for all property-related deadlines\n- Email backup systems for important reminders\n- Multi-channel notification strategies\n\nSystem now communicates:\n- \"🟢 ACTIVE via Zapier MCP\" when real integration available\n- \"🟡 Mock mode (development)\" when using fallback tools\n- Specific email and calendar capabilities for different user types\n- Best practices for property management automation\n\nAll prompts deployed and tested successfully - system ready for enhanced property management with email/calendar automation.",
+      "type": "general",
+      "tags": [
+        "general",
+        "system-prompts",
+        "zapier",
+        "mcp",
+        "email",
+        "calendar",
+        "property-management",
+        "automation"
+      ],
+      "timestamp": "2025-08-20T02:32:35.194Z",
+      "context": "System prompt updates for Zapier MCP email and calendar integration",
+      "accessCount": 0,
+      "lastAccessed": "2025-08-20T02:32:35.194Z",
+      "lastVerified": "2025-08-20T02:32:35.194Z",
+      "status": "fresh"
     }
   ],
-  "lastUpdated": "2025-08-20T02:21:52.737Z"
+  "lastUpdated": "2025-08-20T02:32:35.194Z"
 }
